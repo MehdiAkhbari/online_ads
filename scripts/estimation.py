@@ -11,8 +11,11 @@ data = pd.read_stata(file_dir_name)
 prepare_data(data, base_ad=50, max_ad=100)
 # extract advertiser ranks
 ranks_list = extract_ranks(data)
-# drop rank 0 (based ad) from the list, for the base ad we don't calculate trwatment effect
+# drop rank 0 (based ad) from the list, for the base ad we don't calculate treatment effect
+with open("..\\results\\main_scenario\\ranks_list.pickle", "wb") as file:
+    pickle.dump(ranks_list, file)
 ranks_list.pop(0)
+
 for rank in ranks_list:
     start_time_1 = time.perf_counter()
     print(f"Estimating for Rank {rank}")
