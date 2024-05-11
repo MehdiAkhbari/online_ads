@@ -1,11 +1,8 @@
 from utils import *
 
 
-
 # read data
-# file_name = "Estimation Data by Subject - Last Two Days Binary.dta"
-# file_name = "Estimation Data by Subject - Last Two Days Binary - split 1.dta"
-file_name = "Estimation Data by Subject - Last Two Days Binary - split 2.dta"
+file_name = "Estimation Data by Subject - Last Two Days Binary - split 4.dta"
 file_dir = "..\\data\\"
 file_dir_name = file_dir + file_name
 data = pd.read_stata(file_dir_name)
@@ -13,12 +10,19 @@ data = pd.read_stata(file_dir_name)
 prepare_data(data, base_ad=50, max_ad=100)
 # extract advertiser ranks
 ranks_list = extract_ranks(data)
+# drop rank 0 (based ad) from the list, for the base ad we don't calculate treatment effect
 with open("..\\results\\main_scenario\\ranks_list.pickle", "wb") as file:
     pickle.dump(ranks_list, file)
-# drop rank 0 (based ad) from the list, for the base ad we don't calculate treatment effect
 ranks_list.pop(0)
-# ##########comment this later: it removes rank 1-7 ##########################
-# ranks_list = ([x for x in ranks_list if x > 74] )
+ranks_list.pop(-1)
+
+ranks_list_new = []
+for item in ranks_list:
+    if item > 34:
+        ranks_list_new.append(item)
+
+ranks_list = ranks_list_new
+
 for rank in ranks_list:
     start_time_1 = time.perf_counter()
     print(f"Estimating for Rank {rank}")
@@ -65,9 +69,7 @@ for rank in ranks_list:
     print(f"finished fitting the model in {finish_time - start_time} seconds")
 
     # save the model
-    # file_name = f"..\\results\\main_scenario\\CF - Rank {rank}.pkl"
-    # file_name = f"..\\results\\split 1\\CF - Rank {rank}.pkl"
-    file_name = f"..\\results\\split 2\\CF - Rank {rank}.pkl"
+    file_name = f"..\\results\\split 4\\CF - Rank {rank}.pkl"
     joblib.dump(cf, file_name)
     finish_time_1 = time.perf_counter()
     print(f"finished rank {rank} in {finish_time_1 - start_time_1} seconds")

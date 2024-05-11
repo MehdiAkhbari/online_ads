@@ -1,6 +1,6 @@
 ## It took 12 mins to run this.
 
-import config
+# import config
 from utils import *
 
 

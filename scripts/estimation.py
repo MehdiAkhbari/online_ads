@@ -1,9 +1,11 @@
 from utils import *
 
 
+split_no = 7
 
 # read data
-file_name = "Estimation Data by Subject - Last Two Days Binary - split 1.dta"
+# file_name = f"Estimation Data by Subject - Last Two Days Binary - Merged Subjects.dta"
+file_name = f"Estimation Data by Subject - Last Two Days Binary - split {split_no} - Merged Subjects.dta"
 file_dir = "..\\data\\"
 file_dir_name = file_dir + file_name
 data = pd.read_stata(file_dir_name)
@@ -15,6 +17,8 @@ ranks_list = extract_ranks(data)
 with open("..\\results\\main_scenario\\ranks_list.pickle", "wb") as file:
     pickle.dump(ranks_list, file)
 ranks_list.pop(0)
+ranks_list.pop(-1)
+
 
 for rank in ranks_list:
     start_time_1 = time.perf_counter()
@@ -61,8 +65,10 @@ for rank in ranks_list:
     finish_time = time.perf_counter()
     print(f"finished fitting the model in {finish_time - start_time} seconds")
 
+    
     # save the model
-    file_name = f"..\\results\\split 1\\CF - Rank {rank}.pkl"
+    # file_name = f"..\\results\\main_scenario\\CF - Rank {rank}.pkl"
+    file_name = f"..\\results\\split {split_no}\\CF - Rank {rank}.pkl"
     joblib.dump(cf, file_name)
     finish_time_1 = time.perf_counter()
     print(f"finished rank {rank} in {finish_time_1 - start_time_1} seconds")

@@ -38,7 +38,7 @@ data = pd.read_stata("..\\data\\Simulation Data - Last 2 Days.dta")
 start_time_main = time.perf_counter()
 
 # Chunk the data
-chunk_users_num = 100000
+chunk_users_num = 180000
 n_chunks = int(data.global_token_new.max() / chunk_users_num) + 1
 
 data['chunk'] = ((data['global_token_new'] / chunk_users_num).astype(int) + 1)
@@ -78,7 +78,7 @@ def simulate(data):
         create_chosen_ad_columns(data, user_visit_no=i)
         finish_time_2 = time.perf_counter()
 
-  
+    
         # 3) Update repeats and clicks for the next impressions
         # start_time_1 = time.perf_counter()
         update_repeats(data, user_visit_no=i)
