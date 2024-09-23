@@ -2,11 +2,11 @@ from propensity_model import PropensityModel
 from utils import *
 
 
-split_no = 7
+split_no = 6
 
 # read data
 # file_name = f"Estimation Data - Full Model - Monopoly.dta"
-file_name = f"Estimation Data - Full Model - Split {split_no}.dta"
+file_name = f"Estimation Data - Full Model - Split {split_no} - Root N.dta"
 file_dir = "..\\data\\Full Model\\"
 file_dir_name = file_dir + file_name
 data = pd.read_stata(file_dir_name)
@@ -33,7 +33,7 @@ X_treat_indices = ['sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5',
 
 X_treat_indices_nums = [X.columns.get_loc(col) for col in X_treat_indices if col in X.columns]
 
-ranks_list = [rank for rank in ranks_list if rank > 10]
+ranks_list = [rank for rank in ranks_list if rank >= 10]
 
 
 for rank in ranks_list:
@@ -95,7 +95,7 @@ for rank in ranks_list:
     
     # save the model
     # file_name = f"..\\results\\Full Model\\Monopoly\\CF - Rank {rank}.pkl"
-    file_name = f"..\\results\\Full Model\\Split {split_no}\\CF - Rank {rank}.pkl"
+    file_name = f"..\\results\\Full Model\\Split {split_no} - Root N\\CF - Rank {rank}.pkl"
     joblib.dump(cf, file_name)
     finish_time_1 = time.perf_counter()
     print(f"finished rank {rank} in {finish_time_1 - start_time_1} seconds")

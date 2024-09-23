@@ -15,9 +15,10 @@ import joblib
 import multiprocessing
 import pickle
 
-
-import config
+from propensity_model import PropensityModel
 from utils import *
+import config
+
 
 
 
@@ -26,19 +27,23 @@ from warnings import simplefilter
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 pd.options.mode.chained_assignment = None
 
-
+for rank in ranks_list:
+    cf =  joblib.load(f'..\\results\\Full Model\\Monopoly\\CF - Rank {rank}.pkl')
+    exec(f"cf_{rank} = cf")
+    if rank % 20 == 0:
+        print(f"rank {rank} model loaded!")
 
 base_ad = 50
 max_adv_rank = 100
 max_visit_no = 100 # max number of page visits by each user
 
 # read data
-data = pd.read_stata("..\\data\\Simulation Data - Last 2 Days.dta")
+data = pd.read_stata("..\\data\\Simulation Data - Last 2 Days - Merged Subjects Subsample.dta")
 
 start_time_main = time.perf_counter()
 
 # Chunk the data
-chunk_users_num = 180000
+chunk_users_num = 820000
 n_chunks = int(data.global_token_new.max() / chunk_users_num) + 1
 
 data['chunk'] = ((data['global_token_new'] / chunk_users_num).astype(int) + 1)
@@ -101,10 +106,13 @@ if __name__ == '__main__':
         main_df = pd.DataFrame()
         for result_df in results: 
             main_df = pd.concat([main_df, result_df], ignore_index=True)
-        main_df.to_stata("..\\results\\Simluation Results.dta")
+        main_df.to_stata("..\\results\\Simluation Results - Subsample.dta")
 # finish_time = time.perf_counter()
 # print(f"Merging files finished in {finish_time - start_time} seconds!")
 
 
 # finish_time_main = time.perf_counter()
 # print(f"Chunk {chunk} out of {n_chunks} finished in {finish_time_main - start_time_main} seconds!")
+
+
+

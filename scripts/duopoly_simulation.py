@@ -16,9 +16,15 @@ import multiprocessing
 import pickle
 
 
+
+
 import config
 from utils import *
 
+
+n_processes = 4
+
+criteria = config.my_criteria
 
 
 # For ignoring the warnings
@@ -33,17 +39,20 @@ base_ad = 50
 max_adv_rank = 100
 max_visit_no = 100 # max number of page visits by each user
 
+split_no_1 = config.split_no_1
+split_no_2 = config.split_no_2
+
+
 # read data
-data = pd.read_stata("..\\data\\Simulation Data - Last 2 Days - Aggregate.dta")
+data = pd.read_stata(f"..\\data\\Full Model\\Simulation Data - Full Model - Split {split_no_1} {split_no_2} - Subsample.dta")
+vals_data = pd.read_stata(f"..\\data\\Full Model\\Advertiser Valuations.dta")
 
-
-start_time_main = time.perf_counter()
 
 
 
 
 # Chunk the data
-chunk_users_num = 135000
+chunk_users_num = 1620000 / n_processes
 n_chunks = int(data.global_token_new.max() / chunk_users_num) + 1
 data['chunk'] = ((data['global_token_new'] / chunk_users_num).astype(int) + 1)
 data_chunks = []
@@ -55,7 +64,7 @@ for chunk in range(1, n_chunks + 1):
 
 start_time = time.perf_counter()
 
-def simulate_duopoly(data):
+def simulate_duopoly(data, vals_data, criteria):
     # file_name = f"data_chunk_{chunk}"
     # create empty columns in the dataframe to fill later
     create_chosen_split_ad_vars(data)
@@ -72,14 +81,14 @@ def simulate_duopoly(data):
         # 1) calculate treatment effects, and base ad ctr, then sum them sup and create ctrs for all ads
         start_time = time.perf_counter()
         # a) calc TEs and CTRs on s1
-        calc_split_tes(data, split_no=1, user_visit_no=i, ranks_list=config.ranks_list)
-        calc_base_ad_split_ctr(data,split_no=1, user_visit_no=i)
-        calc_split_ctrs(data, split_no=1, user_visit_no=i, ranks_list=config.ranks_list)
+        calc_split_tes(data, split_no=config.split_no_1, user_visit_no=i, ranks_list=config.ranks_list)
+        calc_base_ad_split_ctr(data, split_no=config.split_no_1, user_visit_no=i)
+        calc_split_ctrs(data, vals_data, split_no=config.split_no_1, user_visit_no=i, ranks_list=config.ranks_list)
 
         # b) calc TEs and CTRs on s2
-        calc_split_tes(data, split_no=2, user_visit_no=i, ranks_list=config.ranks_list)
-        calc_base_ad_split_ctr(data,split_no=2, user_visit_no=i)
-        calc_split_ctrs(data, split_no=2, user_visit_no=i, ranks_list=config.ranks_list)
+        calc_split_tes(data, split_no=config.split_no_2, user_visit_no=i, ranks_list=config.ranks_list)
+        calc_base_ad_split_ctr(data,split_no=config.split_no_2, user_visit_no=i)
+        calc_split_ctrs(data, vals_data, split_no=config.split_no_2, user_visit_no=i, ranks_list=config.ranks_list)
 
         finish_time = time.perf_counter()
         print(f"Step 1 of repeat {i} finished in {finish_time - start_time} seconds!")
@@ -87,70 +96,59 @@ def simulate_duopoly(data):
         start_time = time.perf_counter()
         # find the optimal ads and save them and their corresponding ctr's in the dataframe
         # on s1
-        create_chosen_ad_columns_split(data, split_no=1, user_visit_no=i)
+        create_chosen_ad_columns_split(data, split_no=config.split_no_1, user_visit_no=i, criteria=criteria)
         
 
         # on s2
-        create_chosen_ad_columns_split(data, split_no=2, user_visit_no=i)
+        create_chosen_ad_columns_split(data, split_no=config.split_no_2, user_visit_no=i, criteria=criteria)
         finish_time = time.perf_counter()
         print(f"Step 2 of repeat {i} finished in {finish_time - start_time} seconds!")
-        # 3) Calculate actual tes and ctrs for the chosen ads
-        # start_time = time.perf_counter()
 
-        # calc_base_ad_actual_ctr(data, split_no=1, user_visit_no=i)
-        # calc_base_ad_actual_ctr(data, split_no=2, user_visit_no=i)
-        # finish_1 = time.perf_counter()
-        # print(f"{finish_1 - start_time} seconds ")
-        # calc_actual_ctrs_for_chosen_ads(data, split_no=1, user_visit_no=i)
-        # calc_actual_ctrs_for_chosen_ads(data, split_no=2, user_visit_no=i)
-        # finish_2 = time.perf_counter()
-        # print(f"{finish_2 - finish_1} seconds ")
-        # finish_time = time.perf_counter()
-        # print(f"Step 3 of repeat {i} finished in {finish_time - start_time} seconds!")
-        # 4) Update repeats
+        # 3) Update repeats
         start_time = time.perf_counter()
 
-        update_repeats_on_main_and_split_sqrt_n(data, user_visit_no=i)
+        # update_repeats_on_main_and_split_sqrt_n(data, user_visit_no=i)
+        update_repeats_on_main_and_split(data, split_no=config.split_no_1, user_visit_no=i)
+        update_repeats_on_main_and_split(data, split_no=config.split_no_2, user_visit_no=i)
+        finish_time = time.perf_counter()
+        print(f"Step 3 of repeat {i} finished in {finish_time - start_time} seconds!")
+
+        # 4) Update clicks
+        start_time = time.perf_counter()
+
+        update_clicks_on_main_and_split(data, split_no=config.split_no_1, user_visit_no=i)
+        update_clicks_on_main_and_split(data, split_no=config.split_no_2, user_visit_no=i)
+        # update_clicks_on_main_and_split_sqrt_n(data, user_visit_no=i)     
 
         finish_time = time.perf_counter()
         print(f"Step 4 of repeat {i} finished in {finish_time - start_time} seconds!")
-
-        # 5) Update clicks
-        start_time = time.perf_counter()
-
-        update_clicks_on_main_and_split_sqrt_n(data, user_visit_no=i)     
-
-        finish_time = time.perf_counter()
-        print(f"Step 5 of repeat {i} finished in {finish_time - start_time} seconds!")
         finish_time_1 = time.perf_counter()
         print(f"Repeat {i}  finished in  {finish_time_1 - start_time_1} seconds!")
 
     finish_time_2 = time.perf_counter()
-    data.to_stata(("..\\results\\Duopoly Simluation Results - .dta"))
+    # data.to_stata(("..\\results\\Full Model\\Simulation Results\\Simluation Results - Split {split_no_1} {split_no_2}.dta"))
     print(f"All Repeats finished in {finish_time_2 - start_time_2} seconds!")
     return data
 
 
-def simulate_and_save_chunk(chunk_data, chunk_id):
+def simulate_and_save_chunk(chunk_data, chunk_id, criteria):
     
-    chunk_data = simulate_duopoly(chunk_data) 
+    chunk_data = simulate_duopoly(chunk_data, vals_data, criteria)
     # Create a unique filename for the chunk
-    filename = f"..\\results\\Duopoly Simluation Results - chunk {chunk_id+1}.dta"
-    # Save the processed DataFrame to CSV
+    if criteria == "CTR":
+        filename = f"..\\results\\Full Model\\Simulation Results\\Simluation Results - Split {split_no_1} {split_no_2} - chunk {chunk_id+1}.dta"
+    if criteria == "revenue":
+        filename = f"..\\results\\Full Model\\Simulation Results\\Simluation Results - Split {split_no_1} {split_no_2} Revenue Max - chunk {chunk_id+1}.dta"
+
+    # Save the processed DataFrame to DTA
     chunk_data.to_stata(filename)
 
 
 
 if __name__ == '__main__':
     multiprocessing.freeze_support() 
-    # with multiprocessing.Pool(processes=5) as pool:
-    #     results = pool.map(simulate_duopoly, data_chunks)  # Parallel execution
-    # main_df = pd.DataFrame()
-    # for result_df in results: 
-    #     main_df = pd.concat([main_df, result_df], ignore_index=True)
-    # main_df.to_stata("..\\results\\Duopoly Simluation Results.dta")
-    with multiprocessing.Pool(processes=6) as pool:
-        pool.starmap(simulate_and_save_chunk, [(chunk, i) for i, chunk in enumerate(data_chunks)])
+    with multiprocessing.Pool(processes=n_processes) as pool:
+        pool.starmap(simulate_and_save_chunk, [(chunk, i, criteria) for i, chunk in enumerate(data_chunks)])
 
 
 # finish_time = time.perf_counter()

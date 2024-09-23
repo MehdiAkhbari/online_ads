@@ -1,25 +1,29 @@
 import numpy as np
-# import modin.pandas as pd
 import pandas as pd
 from econml.dml import CausalForestDML
 import matplotlib.pyplot as plt
 import os
 from sklearn.linear_model import Lasso, LassoCV, LogisticRegression, LogisticRegressionCV
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, train_test_split, RandomizedSearchCV
 from sklearn.base import BaseEstimator
+from sklearn.metrics import log_loss, make_scorer, f1_score
 from econml.sklearn_extensions.model_selection import GridSearchCVList
 import time
 import joblib
 import pickle
+from propensity_model import PropensityModel
 import config
+
 
 # set number of cores to use
 n_jobs = 30
 base_ad = 50
-
+max_adv_rank = 100
+max_adv_rank_fringe = 200
+max_visit_no = 100 # max number of page visits by each user
 
 
 def read_data(data_set_name):
@@ -32,48 +36,17 @@ def prepare_data(data, base_ad=50, max_ad=100):
     # Set base treatment advertiser_rank =0
     data.loc[data['advertiser_rank'] == base_ad, 'advertiser_rank'] = 0
     # set advertiser_rank = 101 for 100+ ranked advertisers
-    data.loc[data['advertiser_rank'] > max_ad, 'advertiser_rank'] = (max_ad + 1)
+    data.loc[(data['advertiser_rank'] > max_adv_rank) & (data['advertiser_rank'] <= max_adv_rank_fringe), 'advertiser_rank'] = (max_adv_rank + 1)
+    data.loc[(data['advertiser_rank'] > max_adv_rank_fringe), 'advertiser_rank'] = (max_adv_rank_fringe + 1)
+
 
 def extract_ranks(data):
     # extract the list of available advertiser_ranks
     ranks_list = data['advertiser_rank'].value_counts().sort_index().index.tolist()
+
+
     return ranks_list
 
-
-
-class PropensityModel(BaseEstimator):
-    def __init__(self):
-        self.lr = LogisticRegression(max_iter=2000)
-
-    def predict_proba(self, X, X_indices=slice(-14,-1)):
-        return self.lr.predict_proba(X[:,X_indices])
-
-
-    
-    # X_indices are the ones that are used for the estimation of the propensity score
-    def fit(self, X, y, X_indices=slice(-14,-1)):
-        self.lr.fit(X[:,X_indices], y)
-        return self
-
-
-# Instantiate propensity_model from the PropensityModel class
-propensity_model = PropensityModel()
-
-
-# define the Custom Treatment Model class (its exactly the PropensityModel above. However, I had to include it because I ran the initial model with this one):
-class CustomTreatmentModel(BaseEstimator):
-    def __init__(self):
-        self.lr = LogisticRegression(max_iter=2000)
-
-    def predict_proba(self, X, X_indices=slice(-14,-1)):
-        return self.lr.predict_proba(X[:,X_indices])
-
-
-    
-    # X_indices are the ones that are used for the estimation of the propensity score
-    def fit(self, X, y, X_indices=slice(-14,-1)):
-        self.lr.fit(X[:,X_indices], y)
-        return self
 
 
 
@@ -84,18 +57,18 @@ class CustomTreatmentModel(BaseEstimator):
 # Define the hyperparameters to search over
 param_grid = {
     # 'n_estimators': [50, 100, 200],
-    'n_estimators': [200],
+    'n_estimators': [100],
     'max_depth': [10, 20, 30],
-    'min_samples_split': [1000 , 2000, 3000, 5000]
+    'min_samples_split': [1000 , 2000, 5000]
 }
 
 # Define the hyperparameters to search over
 cf_param_grid = {
     # 'n_estimators': [100, 200, 300],
-    'n_estimators': [600],
+    'n_estimators': [300],
     'max_depth': [10, 20, 30],
-    'min_samples_split': [1000 , 2000, 3000, 5000],
-    'max_samples': [0.1, 0.2, 0.3]
+    'min_samples_split': [1000 , 2000, 5000],
+    # 'max_samples': [0.1, 0.2, 0.3]
 }
 
 
@@ -103,7 +76,16 @@ cf_param_grid = {
 
 def define_xyt(data):
     # define X
-    X = data.drop(['publisher_subject', 'advertiser_rank', 'is_clicked', 'event_no', 'prop'], axis=1)
+    X = data[['impression_repeat', 'impression_repeat_base_ad', 
+              'previous_clicks', 'previous_clicks_base_ad', 'previous_clicks_all_ads',
+               'total_visits', 
+               'visit_s1', 'visit_s2', 'visit_s3', 'visit_s4', 'visit_s5',
+               'visit_s6','visit_s7', 'visit_s8', 'visit_s9', 'visit_s10',
+               'visit_s11','visit_s12', 'visit_s13',
+               'sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5', 
+               'sub_6', 'sub_7', 'sub_8','sub_9', 'sub_10', 
+               'sub_11', 'sub_12', 'sub_13',
+               'publisher_rank_sub', 'day', 'hour', 'mobile', 'ads_on_page']]
     
     # define T
     T = data['advertiser_rank']
@@ -113,7 +95,7 @@ def define_xyt(data):
     return X, Y, T
 
 
-def m_model_best_estimator(X, Y, n_jobs=n_jobs):
+def m_model_best_estimator(X, Y, param_grid, n_jobs=n_jobs):
     start_time = time.perf_counter()
     m_model = RandomForestRegressor(verbose=0, n_jobs=n_jobs)
     
@@ -125,33 +107,31 @@ def m_model_best_estimator(X, Y, n_jobs=n_jobs):
     best_estimator = grid_search.best_estimator_
     finish_time = time.perf_counter()
     print(f"finished tuning the M model in {finish_time - start_time} seconds")
-    return best_params
+    return best_params, best_estimator
+
+
+def e_model_best_estimator(X, T, param_grid, n_jobs=n_jobs):
+    start_time = time.perf_counter()
+    e_model = PropensityModel()
+
+    # Define a custom scorer using log_loss
+    # log_loss_scorer = make_scorer(log_loss, greater_is_better=False, needs_proba=True)
+
+    # Define the scorer
+    f1_scorer = make_scorer(f1_score)
+
+    # Perform grid search cross-validation
+    # grid_search = GridSearchCV(estimator=e_model, param_grid=param_grid, cv=5, n_jobs=n_jobs, scoring=log_loss_scorer)
+    grid_search = GridSearchCV(estimator=e_model, param_grid=param_grid, scoring=f1_scorer, cv=5)
+    grid_search.fit(X, T)
+
+    best_params = grid_search.best_params_
+    best_estimator = grid_search.best_estimator_
+    finish_time = time.perf_counter()
+    print(f"Finished tuning the E model in {finish_time - start_time} seconds")
+    return best_params, best_estimator
 
     
-    
-
-# def causal_forest_estimate(X, Y, T, cf_param_grid):
-#     # tune the model:
-#     start_time = time.perf_counter()
-
-#     cf.tune(
-#                 Y=Y,
-#                 T=T,
-#                 X=X,
-#                 params=cf_param_grid)
-    
-#     finish_time = time.perf_counter()
-#     print(f"finished tuning the model in {finish_time - start_time} seconds")
-
-#     # fit the model using tuned parameters:
-#     start_time = time.perf_counter()
-    
-#     cf.fit(Y=Y, T=T, X=X, inference="blb", cache_values=True)
-    
-#     finish_time = time.perf_counter()
-#     print(f"finished fitting the model in {finish_time - start_time} seconds")
-#     return cf
-
   
     
 ###########################Monopoly Simulation Utility Fuctions########################
@@ -162,18 +142,17 @@ def construct_X(data, user_visit_no, ad_rank):
     After calling this function, you can estimate the treatment effect for ad ad_rank and the subset of data for which user_visit_no = user_visit_no.
     """
     # Define X variables
-    X = data[['impression_repeat', 'previous_clicks', 'previous_clicks_all_ads',
-        'impression_repeat_base_ad', 'previous_clicks_base_ad', 'total_visits',
-        'visit_s1', 'visit_s2', 'visit_s3', 'visit_s4', 'visit_s5', 'visit_s6',
-        'visit_s7', 'visit_s8', 'visit_s9', 'visit_s10', 'visit_s11',
-        'visit_s12', 'visit_s13', 'visit_s14', 'visit_s15', 'visit_s16',
-        'visit_s17', 'visit_s18', 'visit_s19', 'visit_s20', 'visit_s21',
-        'visit_s22', 'visit_s23', 'visit_s24', 'visit_s25', 'visit_s26',
-        'sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5', 'sub_6', 'sub_7', 'sub_8',
-        'sub_9', 'sub_10', 'sub_11', 'sub_12', 'sub_13', 'sub_14', 'sub_15',
-        'sub_16', 'sub_17', 'sub_18', 'sub_19', 'sub_20', 'sub_21', 'sub_22',
-        'sub_23', 'sub_24', 'sub_25', 'sub_26', 'mobile']]
-
+    X = data[['impression_repeat', 'impression_repeat_base_ad', 
+              'previous_clicks', 'previous_clicks_base_ad', 'previous_clicks_all_ads',
+               'total_visits', 
+               'visit_s1', 'visit_s2', 'visit_s3', 'visit_s4', 'visit_s5',
+               'visit_s6','visit_s7', 'visit_s8', 'visit_s9', 'visit_s10',
+               'visit_s11','visit_s12', 'visit_s13',
+               'sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5', 
+               'sub_6', 'sub_7', 'sub_8','sub_9', 'sub_10', 
+               'sub_11', 'sub_12', 'sub_13',
+               'publisher_rank_sub', 'day', 'hour', 'mobile', 'ads_on_page']]
+    
     # Construct X variable for the input to the causal forest
     # a) construct base ad initial clicks and repeats
 
@@ -210,31 +189,38 @@ def calc_tes(data, user_visit_no, ranks_list):
     print(f"finished calculating te's for rank {rank} in {finish_time - start_time} seconds")
 
 
+def calc_base_ad_ctr_vector(data, user_visit_no):
+    start_time = time.perf_counter()
+    X = construct_X(data, user_visit_no=user_visit_no, ad_rank=1) # Here I use cf_1 (the first ads causal forest to estimate y0)
+    tau_1 = config.cf_1.const_marginal_effect(X[data['user_visit_no'] == user_visit_no]).reshape(-1, 1)
+    m_1 = config.m1.predict(X[data['user_visit_no'] == user_visit_no]).reshape(-1, 1)
+    e_1 = config.e1.predict_proba(X[data['user_visit_no'] == user_visit_no]).reshape(-1, 1)
+    y_0 = m_1 - tau_1 * e_1 
+    finish_time = time.perf_counter()
+    print(f"finished calculating base ad ctr in {finish_time - start_time} seconds")
+    return y_0
+
+     
+
+
+
 def calc_base_ad_ctr(data, user_visit_no):
     """
     This function calculates E(y0|X=x) for the subset of DataFrame "data" for which the "user_visit_no" is a specific number.
     The output is saved in columns y_{base_ad} of the dataframe "data"
     """
     start_time = time.perf_counter()
-    # Define X variables (Note that I am not using previous_clicks and i mpression_repeat variables here, because I'm only using base ad repeats and clicks here)
-    X = data[['previous_clicks_all_ads',
-        'impression_repeat_base_ad', 'previous_clicks_base_ad', 'total_visits',
-        'visit_s1', 'visit_s2', 'visit_s3', 'visit_s4', 'visit_s5', 'visit_s6',
-        'visit_s7', 'visit_s8', 'visit_s9', 'visit_s10', 'visit_s11',
-        'visit_s12', 'visit_s13', 'visit_s14', 'visit_s15', 'visit_s16',
-        'visit_s17', 'visit_s18', 'visit_s19', 'visit_s20', 'visit_s21',
-        'visit_s22', 'visit_s23', 'visit_s24', 'visit_s25', 'visit_s26',
-        'sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5', 'sub_6', 'sub_7', 'sub_8',
-        'sub_9', 'sub_10', 'sub_11', 'sub_12', 'sub_13', 'sub_14', 'sub_15',
-        'sub_16', 'sub_17', 'sub_18', 'sub_19', 'sub_20', 'sub_21', 'sub_22',
-        'sub_23', 'sub_24', 'sub_25', 'sub_26', 'mobile']]
+    y_0 = calc_base_ad_ctr_vector(data, user_visit_no)
     var_name = f"y_{base_ad}"
-    data.loc[data['user_visit_no'] == user_visit_no, var_name] = config.base_ad_y_model.predict(X[data['user_visit_no'] == user_visit_no])
+    
+    data.loc[data['user_visit_no'] == user_visit_no, var_name] = np.maximum(y_0, 0)
+
+
     finish_time = time.perf_counter()
     # print(f"finished calculating y0 in {finish_time - start_time} seconds")
 
 
-def calc_ctrs(data, user_visit_no):
+def calc_ctrs(data, vals_data, user_visit_no):
     """
     This function calculates the click rates of all ads for the subset of DataFrame "data" for which the "user_visit_no" is a specific number by adding y_{base_ad} and treatment effects.
     The output is saved in columns y_1, ..., y_{max_adv_rank} of the dataframe "data"
@@ -244,11 +230,15 @@ def calc_ctrs(data, user_visit_no):
         y_var_name = f'y_{rank}'
         te_var_name = f'te_{rank}'
         y_base_ad = f'y_{base_ad}'
+        rev_var_name = f'rev_{rank}'
         data.loc[data['user_visit_no'] == user_visit_no, y_var_name] = data.loc[data['user_visit_no'] == user_visit_no, te_var_name] + data.loc[data['user_visit_no'] == user_visit_no, y_base_ad]
         # set y_{rank} to 0 if it is negative
         data.loc[data['user_visit_no'] == user_visit_no, y_var_name] = data.loc[data['user_visit_no'] == user_visit_no, y_var_name].apply(lambda x: max(x, 0))
+        # revenue = ctr * valuation 
+        valuation = vals_data.loc[vals_data['advertiser_rank'] == rank].advertiser_val_cents.to_numpy()[0]
+        data.loc[data['user_visit_no'] == user_visit_no, rev_var_name] = data.loc[data['user_visit_no'] == user_visit_no, y_var_name] * valuation
     finish_time = time.perf_counter()
-    # print(f"finished calculating y_i's in {finish_time - start_time} seconds")
+    print(f"finished calculating y_i's in {finish_time - start_time} seconds")
 
 
 def create_chosen_ad_vars(data):
@@ -274,13 +264,20 @@ def create_chosen_ad_vars(data):
 
 
     for ad in range(1, config.max_ads_per_page + 1):
+        var_name2 = f"chosen_ad_rev_{ad}"
+        data.loc[:, var_name2] = np.nan
+
+
+    for ad in range(1, config.max_ads_per_page + 1):
         var_name2 = f"chosen_ad_click_dummy_{ad}"
         data.loc[:, var_name2] = np.nan
     data.loc[:, 'num_ads'] = np.nan
 
+  
 
 
-def find_optimal_ads(row, y_cols):
+
+def find_optimal_ads(row, criteria):
     """
     This functions calculates optimal ads (based on highest treatment effects) to be shown to the impression in each row. based on the calculated treatment effects y_i s
     Inputs: 
@@ -291,20 +288,35 @@ def find_optimal_ads(row, y_cols):
         - chosen_ads: a list of ads to be shown
         - chosen_ad_ys: a list of the corresponding treatment effects
     """
+    # y_cols = data.loc[0: 1, :].filter(regex="^y_", axis=1).columns
+    # rev_cols = data.loc[0: 1, :].filter(regex="^rev_", axis=1).columns
+
+    y_cols = row.filter(regex="^y_", axis=0).index
+    rev_cols = row.filter(regex="^rev_", axis=0).index
 
 
     # sort the values by the value of the criteria
-    sorted_ads = row[y_cols].sort_values(ascending=False).index.to_list()
-    l = min(row['ads_on_page'], config.max_ads_per_page)    # number of ads to be shown on each visit
-    chosen_ads = sorted_ads[0 : l]
+    if criteria == "CTR":
+        sorted_ads = row[y_cols].sort_values(ascending=False).index.to_list()
+        l = min(row['ads_on_page'], config.max_ads_per_page)    # number of ads to be shown on each visit
+        chosen_ads = sorted_ads[0 : l]
+        chosen_ads = [int(element.strip("y_")) for element in chosen_ads]
+
+    if criteria == "revenue":
+        sorted_ads = row[rev_cols].sort_values(ascending=False).index.to_list() 
+        l = min(row['ads_on_page'], config.max_ads_per_page)    # number of ads to be shown on each visit  
+        chosen_ads = sorted_ads[0 : l]
+        chosen_ads = [int(element.strip("rev_")) for element in chosen_ads]
+
+
     # creates a list of chosen ad ranks
-    chosen_ads = [int(element.strip("y_")) for element in chosen_ads]
     chosen_ad_ys = row[y_cols].sort_values(ascending=False).values[0:l]
-    return chosen_ads, chosen_ad_ys
+    chosen_ad_revs = row[rev_cols].sort_values(ascending=False).values[0:l]
+    return chosen_ads, chosen_ad_ys, chosen_ad_revs
 
 
 
-def create_chosen_ad_columns(data, user_visit_no):
+def create_chosen_ad_columns(data, user_visit_no, criteria):
     """
     This function finds the optimal ads for the subsection of "data" for which user_visit_no == user_visit_no
     The chosen ads and their corresponding click rates are saved in 'chosen_ad_{ad}' and 'chosen_ad_y_{ad}'
@@ -312,19 +324,20 @@ def create_chosen_ad_columns(data, user_visit_no):
     # select treatment effect columns
     # te_cols = data.loc[0: 1, :].filter(regex="^te_", axis=1).columns
     # select ctr columns:
-    y_cols = data.loc[0: 1, :].filter(regex="^y_", axis=1).columns
 
 
     for index, row in data[data['user_visit_no'] == user_visit_no].iterrows():
         
-        chosen_ads, chosen_ad_ys = find_optimal_ads(row, y_cols)
+        chosen_ads, chosen_ad_ys, chosen_ad_revs = find_optimal_ads(row, criteria)
         chosen_ads = [int(element) for element in chosen_ads]
         l = len(chosen_ads)
         last_chosen_ad_name = f"chosen_ad_{l}"
         # last_chosen_ad_te_name = f"chosen_ad_te_{l}"
         last_chosen_ad_y_name = f"chosen_ad_y_{l}"
+        last_chosen_ad_rev_name = f"chosen_ad_rev_{l}"
         data.loc[index, 'chosen_ad_1': last_chosen_ad_name] = chosen_ads
         data.loc[index, 'chosen_ad_y_1' : last_chosen_ad_y_name] = chosen_ad_ys
+        data.loc[index, 'chosen_ad_rev_1' : last_chosen_ad_rev_name] = chosen_ad_revs
         data.at[index, 'num_ads'] = int(l)
         # if index % 10000 == 0:
         #     print(f"index {index} done!")
@@ -371,6 +384,57 @@ def update_clicks(data, user_visit_no):
 
 
 
+def simulate_monopoly(data, vals_data, criteria):
+    # file_name = f"data_chunk_{chunk}"
+    # create empty columns in the dataframe to fill later
+    create_chosen_ad_vars(data)
+    # print(f"\n\n\n=======> Chunk #{chunk}")
+    start_time = time.perf_counter()
+
+
+    for i in range(1, max_visit_no + 1):
+
+        start_time_1 = time.perf_counter()
+        print(f"\n\n --->Repeat #{i}:")
+        # 1) calculate treatment effects, and base ad ctr, then sum them sup and create ctrs for all ads
+        # start_time = time.perf_counter()
+        calc_tes(data, user_visit_no=i, ranks_list=config.ranks_list)
+        calc_base_ad_ctr(data, user_visit_no=i)
+        calc_ctrs(data, vals_data, user_visit_no=i)
+
+        # 2) determine what ads are chosen
+        # a. create empty columns in the dataframe to fill later
+        start_time_2 = time.perf_counter()
+        # find the optimal ads and save them and their corresponding ctr's in the dataframe
+        create_chosen_ad_columns(data, user_visit_no=i, criteria=criteria)
+        finish_time_2 = time.perf_counter()
+        print(f"Choosing optimal ads for repeat  {i} finished in {finish_time_2 - start_time_2} seconds!")
+
+    
+        # 3) Update repeats and clicks for the next impressions
+        # start_time_1 = time.perf_counter()
+        start_time_2 = time.perf_counter()
+        update_repeats(data, user_visit_no=i)
+        finish_time_2 = time.perf_counter()
+        print(f"Updating repeats for repeat  {i} finished in {finish_time_2 - start_time_2} seconds!")
+
+
+        start_time_2 = time.perf_counter()
+        update_clicks(data, user_visit_no=i) 
+        finish_time_2 = time.perf_counter()
+        print(f"Updating clicks for repeat  {i} finished in {finish_time_2 - start_time_2} seconds!")
+
+        finish_time_1 = time.perf_counter()
+
+        print(f"Repeat {i} finished in {finish_time_1 - start_time_1} seconds!")
+
+    finish_time = time.perf_counter()
+    print(f"All Repeats finished in {finish_time - start_time} seconds!")
+    return data
+
+
+
+
 
 # def create_actual_ctr_vars(data_s):
 #     """
@@ -399,24 +463,22 @@ def construct_split_X(data, split_no, user_visit_no, ad_rank):
     After calling this function, you can estimate the treatment effect for ad ad_rank and the subset of data for which user_visit_no = user_visit_no.
     """
     # Define X variables
-    X = data.loc[data['split'] ==split_no, ['impression_repeat_s', 'previous_clicks_s', 'previous_clicks_all_ads_s',
-        'impression_repeat_base_ad_s', 'previous_clicks_base_ad_s', 'total_visits_s',
-        'visit_s1_s', 'visit_s2_s', 'visit_s3_s', 'visit_s4_s', 'visit_s5_s', 'visit_s6_s',
-        'visit_s7_s', 'visit_s8_s', 'visit_s9_s', 'visit_s10_s', 'visit_s11_s',
-        'visit_s12_s', 'visit_s13_s', 'visit_s14_s', 'visit_s15_s', 'visit_s16_s',
-        'visit_s17_s', 'visit_s18_s', 'visit_s19_s', 'visit_s20_s', 'visit_s21_s',
-        'visit_s22_s', 'visit_s23_s', 'visit_s24_s', 'visit_s25_s', 'visit_s26_s',
-        'sub_1_s', 'sub_2_s', 'sub_3_s', 'sub_4_s', 'sub_5_s', 'sub_6_s', 'sub_7_s', 'sub_8_s',
-        'sub_9_s', 'sub_10_s', 'sub_11_s', 'sub_12_s', 'sub_13_s', 'sub_14_s', 'sub_15_s',
-        'sub_16_s', 'sub_17_s', 'sub_18_s', 'sub_19_s', 'sub_20_s', 'sub_21_s', 'sub_22_s',
-        'sub_23_s', 'sub_24_s', 'sub_25_s', 'sub_26_s', 'mobile_s']]
+    
+    X = data.loc[data['split'] == split_no, ['impression_repeat_s', 'impression_repeat_base_ad_s', 
+              'previous_clicks_s', 'previous_clicks_base_ad_s', 'previous_clicks_all_ads_s',
+               'total_visits_s', 
+               'visit_s1_s', 'visit_s2_s', 'visit_s3_s', 'visit_s4_s', 'visit_s5_s',
+               'visit_s6_s','visit_s7_s', 'visit_s8_s', 'visit_s9_s', 'visit_s10_s',
+               'visit_s11_s','visit_s12_s', 'visit_s13_s',
+               'sub_1_s', 'sub_2_s', 'sub_3_s', 'sub_4_s', 'sub_5_s', 
+               'sub_6_s', 'sub_7_s', 'sub_8_s','sub_9_s', 'sub_10_s', 
+               'sub_11_s', 'sub_12_s', 'sub_13_s',
+               'publisher_rank_sub', 'day', 'hour', 'mobile', 'ads_on_page']]
     # remove "_s" from column names in X to be able to run the causal forest model
     X.columns = X.columns.str[:-2]
 
-    #################################### this is for fixing the missing variable sub_24, sub_25, sub_26 on the second split when training the model. Remove this when you fix this problem:
-    # if split_no == 2:
-    #     X = X.drop(['sub_24', 'sub_25', 'sub_26'], axis=1)
-
+    # rename var name "mobi" to 'mobile' (revert the above line)
+    X = X.rename(columns={'mobi': 'mobile', 'ho': 'hour', 'd': 'day', 'ho': 'hour', 'ads_on_pa': 'ads_on_page'})
     # Construct X variable for the input to the causal forest
     # a) construct base ad initial clicks and repeats
 
@@ -439,25 +501,25 @@ def construct_actual_X(data, split_no, user_visit_no, ad_rank):
     After calling this function, you can estimate the treatment effect for ad ad_rank and the subset of data for which user_visit_no = user_visit_no.
     """
     # Define X variables
-    X = data.loc[data['split'] ==split_no, ['impression_repeat', 'previous_clicks', 'previous_clicks_all_ads',
-        'impression_repeat_base_ad', 'previous_clicks_base_ad', 'total_visits',
-        'visit_s1', 'visit_s2', 'visit_s3', 'visit_s4', 'visit_s5', 'visit_s6',
-        'visit_s7', 'visit_s8', 'visit_s9', 'visit_s10', 'visit_s11',
-        'visit_s12', 'visit_s13', 'visit_s14', 'visit_s15', 'visit_s16',
-        'visit_s17', 'visit_s18', 'visit_s19', 'visit_s20', 'visit_s21',
-        'visit_s22', 'visit_s23', 'visit_s24', 'visit_s25', 'visit_s26',
-        'sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5', 'sub_6', 'sub_7', 'sub_8',
-        'sub_9', 'sub_10', 'sub_11', 'sub_12', 'sub_13', 'sub_14', 'sub_15',
-        'sub_16', 'sub_17', 'sub_18', 'sub_19', 'sub_20', 'sub_21', 'sub_22',
-        'sub_23', 'sub_24', 'sub_25', 'sub_26', 'mobile']]
+    # X = data.loc[data['split'] ==split_no, ['impression_repeat', 'previous_clicks', 'previous_clicks_all_ads',
+    #     'impression_repeat_base_ad', 'previous_clicks_base_ad', 'total_visits',
+    #     'visit_s1', 'visit_s2', 'visit_s3', 'visit_s4', 'visit_s5', 'visit_s6',
+    #     'visit_s7', 'visit_s8', 'visit_s9', 'visit_s10', 'visit_s11',
+    #     'visit_s12', 'visit_s13', 
+    #     'sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5', 'sub_6', 'sub_7', 'sub_8',
+    #     'sub_9', 'sub_10', 'sub_11', 'sub_12', 'sub_13', 'mobile']]
 
+    X = data.loc[data['split'] == split_no, ['impression_repeat', 'impression_repeat_base_ad', 
+        'previous_clicks', 'previous_clicks_base_ad', 'previous_clicks_all_ads',
+        'total_visits', 
+        'visit_s1', 'visit_s2', 'visit_s3', 'visit_s4', 'visit_s5',
+        'visit_s6','visit_s7', 'visit_s8', 'visit_s9', 'visit_s10',
+        'visit_s11','visit_s12', 'visit_s13',
+        'sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5', 
+        'sub_6', 'sub_7', 'sub_8','sub_9', 'sub_10', 
+        'sub_11', 'sub_12', 'sub_13',
+        'publisher_rank_sub', 'day', 'hour', 'mobile', 'ads_on_page']]
 
-    # #################################### this is for fixing the missing variable sub_24, sub_25, sub_26 on the second split when training the model. Remove this when you fix this problem:
-    # if split_no == 2:
-    #     X = X.drop(['sub_24', 'sub_25', 'sub_26'], axis=1)
-
-    # Construct X variable for the input to the causal forest
-    # a) construct base ad initial clicks and repeats
 
     base_ad_str = f"r_{base_ad}"
     X.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), 'impression_repeat_base_ad'] = data[(data['user_visit_no'] == user_visit_no)  & (data['split'] == split_no)][base_ad_str] + 1  # +1 is because r_* shows previous impressions, but impression repeat is the number of repeats (including current one)
@@ -488,7 +550,7 @@ def calc_split_tes(data, split_no, user_visit_no, ranks_list):
         if (len(data[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)]) > 0):
             exec(f"data.loc[((data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)) , var_name_split] = config.cf_{rank}_s{split_no}.const_marginal_effect(X_s.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)])")
             exec(f"data.loc[((data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)) , var_name_actual] = config.cf_{rank}.const_marginal_effect(X.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)])")
-        # if rank % 10 == 1:
+       # if rank % 10 == 1:
         #     print(f"rank {rank} done!")
     finish_time = time.perf_counter()
     print(f"finished calculating te's for rank {rank} in {finish_time - start_time} seconds")
@@ -501,54 +563,45 @@ def calc_base_ad_split_ctr(data, split_no, user_visit_no):
     The output is saved in columns y_{base_ad} of the dataframe "data"
     """
     start_time = time.perf_counter()
-    # Define X variables (Note that I am not using previous_clicks and i mpression_repeat variables here, because I'm only using base ad repeats and clicks here)
-    X_s = data[['previous_clicks_all_ads_s',
-        'impression_repeat_base_ad_s', 'previous_clicks_base_ad_s', 'total_visits_s',
-        'visit_s1_s', 'visit_s2_s', 'visit_s3_s', 'visit_s4_s', 'visit_s5_s', 'visit_s6_s',
-        'visit_s7_s', 'visit_s8_s', 'visit_s9_s', 'visit_s10_s', 'visit_s11_s',
-        'visit_s12_s', 'visit_s13_s', 'visit_s14_s', 'visit_s15_s', 'visit_s16_s',
-        'visit_s17_s', 'visit_s18_s', 'visit_s19_s', 'visit_s20_s', 'visit_s21_s',
-        'visit_s22_s', 'visit_s23_s', 'visit_s24_s', 'visit_s25_s', 'visit_s26_s',
-        'sub_1_s', 'sub_2_s', 'sub_3_s', 'sub_4_s', 'sub_5_s', 'sub_6_s', 'sub_7_s', 'sub_8_s',
-        'sub_9_s', 'sub_10_s', 'sub_11_s', 'sub_12_s', 'sub_13_s', 'sub_14_s', 'sub_15_s',
-        'sub_16_s', 'sub_17_s', 'sub_18_s', 'sub_19_s', 'sub_20_s', 'sub_21_s', 'sub_22_s',
-        'sub_23_s', 'sub_24_s', 'sub_25_s', 'sub_26_s', 'mobile_s']]
-    
+    # # Define X variables 
+    # X_s = data.loc[data['split'] == split_no, ['impression_repeat_s', 'impression_repeat_base_ad_s', 
+    #           'previous_clicks_s', 'previous_clicks_base_ad_s', 'previous_clicks_all_ads_s',
+    #            'total_visits_s', 
+    #            'visit_s1_s', 'visit_s2_s', 'visit_s3_s', 'visit_s4_s', 'visit_s5_s',
+    #            'visit_s6_s','visit_s7_s', 'visit_s8_s', 'visit_s9_s', 'visit_s10_s',
+    #            'visit_s11_s','visit_s12_s', 'visit_s13_s',
+    #            'sub_1_s', 'sub_2_s', 'sub_3_s', 'sub_4_s', 'sub_5_s', 
+    #            'sub_6_s', 'sub_7_s', 'sub_8_s','sub_9_s', 'sub_10_s', 
+    #            'sub_11_s', 'sub_12_s', 'sub_13_s',
+    #            'publisher_rank_sub', 'day', 'hour', 'mobile', 'ads_on_page']]
+
+    # # remove "_s" from column names in X to be able to run the causal forest model
+    # X_s.columns = X_s.columns.str[:-2]
+
+    # # rename var name "mobi" to 'mobile' (revert the above line)
+    # X_s = X_s.rename(columns={'mobi': 'mobile', 'ho': 'hour', 'd': 'day', 'ho': 'hour', 'ads_on_pa': 'ads_on_page'})
 
 
-    # remove "_s" from column names in X to be able to run the causal forest model
-    X_s.columns = X_s.columns.str[:-2]
 
+    X = construct_X(data[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)], user_visit_no=user_visit_no, ad_rank=1) # Here I use cf_1 (the first ads causal forest to estimate y0)
+    tau_1 = config.cf_1.const_marginal_effect(X[data['user_visit_no'] == user_visit_no]).reshape(-1, 1)
+    m_1 = config.m1.predict(X[data['user_visit_no'] == user_visit_no]).reshape(-1, 1)
+    e_1 = config.e1.predict_proba(X[data['user_visit_no'] == user_visit_no]).reshape(-1, 1)
+    y_0 = m_1 - tau_1 * e_1
 
-    X = data[['previous_clicks_all_ads',
-        'impression_repeat_base_ad', 'previous_clicks_base_ad', 'total_visits',
-        'visit_s1', 'visit_s2', 'visit_s3', 'visit_s4', 'visit_s5', 'visit_s6',
-        'visit_s7', 'visit_s8', 'visit_s9', 'visit_s10', 'visit_s11',
-        'visit_s12', 'visit_s13', 'visit_s14', 'visit_s15', 'visit_s16',
-        'visit_s17', 'visit_s18', 'visit_s19', 'visit_s20', 'visit_s21',
-        'visit_s22', 'visit_s23', 'visit_s24', 'visit_s25', 'visit_s26',
-        'sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5', 'sub_6', 'sub_7', 'sub_8',
-        'sub_9', 'sub_10', 'sub_11', 'sub_12', 'sub_13', 'sub_14', 'sub_15',
-        'sub_16', 'sub_17', 'sub_18', 'sub_19', 'sub_20', 'sub_21', 'sub_22',
-        'sub_23', 'sub_24', 'sub_25', 'sub_26', 'mobile']]
-    
-
-    # #################################### this is for fixing the missing variable sub_24, sub_25, sub_26 on the second split when training the model. Remove this when you fix this problem:
-    # if (split_no == 2):
-    #     X = X.drop(['sub_24', 'sub_25', 'sub_26'], axis=1) 
 
     var_name_split = f"y_{base_ad}_s"
     var_name_actual = f"y_{base_ad}"
 
     if (len(data[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)]) > 0):
-        data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), var_name_split] = config.base_ad_y_model.predict(X_s.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)])
-        data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), var_name_actual] = config.base_ad_y_model.predict(X.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)])
+        data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), var_name_split] = np.maximum(y_0, 0)
+        data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), var_name_actual] = np.maximum(y_0, 0)
     finish_time = time.perf_counter()
     # print(f"finished calculating y0 in {finish_time - start_time} seconds")
 
 
 
-def calc_split_ctrs(data, split_no, user_visit_no, ranks_list):
+def calc_split_ctrs(data, vals_data, split_no, user_visit_no, ranks_list):
     """
     This function calculates the click rates of all ads for the subset of DataFrame "data" for which the "user_visit_no" is a specific number by adding y_{base_ad} and treatment effects.
     The output is saved in columns y_1, ..., y_{max_adv_rank} of the dataframe "data"
@@ -558,9 +611,14 @@ def calc_split_ctrs(data, split_no, user_visit_no, ranks_list):
         y_var_name_split = f'y_{rank}_s'
         te_var_name_split = f'te_{rank}_s'
         y_base_ad_split = f'y_{base_ad}_s'
+        rev_var_name_split = f'rev_{rank}_s'
         y_var_name_actual = f'y_{rank}'
         te_var_name_actual = f'te_{rank}'
         y_base_ad_actual = f'y_{base_ad}'
+        rev_var_name_actual = f'rev_{rank}'
+        
+
+
         if (len(data[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)]) > 0):
             # calc ctr for split data
             data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), y_var_name_split] = data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), te_var_name_split] + data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), y_base_ad_split]
@@ -570,6 +628,13 @@ def calc_split_ctrs(data, split_no, user_visit_no, ranks_list):
             data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), y_var_name_actual] = data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), te_var_name_actual] + data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), y_base_ad_actual]
             # set y_{rank} to 0 if it is negative
             data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), y_var_name_actual] = data.loc[data['user_visit_no'] == user_visit_no, y_var_name_actual].apply(lambda x: max(x, 0))
+
+            # revenues:
+            
+            data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), rev_var_name_split] = data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), y_var_name_split] * vals_data.loc[vals_data['advertiser_rank'] == rank].advertiser_val_cents.squeeze()     # squeeze() converts pandas Series to scalar
+            data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), rev_var_name_actual] = data.loc[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no), y_var_name_actual] * vals_data.loc[vals_data['advertiser_rank'] == rank].advertiser_val_cents.squeeze()
+
+
     finish_time = time.perf_counter()
     # print(f"finished calculating y_i's in {finish_time - start_time} seconds")
 
@@ -608,6 +673,14 @@ def create_chosen_split_ad_vars(data):
         data.loc[:, var_name] = np.nan
 
     for ad in range(1, config.max_ads_per_page + 1):
+        var_name = f"chosen_ad_rev_{ad}" 
+        data.loc[:, var_name] = np.nan
+
+    for ad in range(1, config.max_ads_per_page + 1):
+        var_name = f"chosen_ad_rev_{ad}_s" 
+        data.loc[:, var_name] = np.nan
+
+    for ad in range(1, config.max_ads_per_page + 1):
         var_name = f"chosen_ad_click_dummy_{ad}"
         data.loc[:, var_name] = np.nan
     data.loc[:, 'num_ads'] = np.nan
@@ -615,8 +688,9 @@ def create_chosen_split_ad_vars(data):
 
 
 
-# This function is the same for split and non-split
-def find_optimal_split_ads(row, y_cols):
+
+
+def find_optimal_split_ads(row, criteria):
     """
     This functions calculates optimal ads (based on highest treatment effects) to be shown to the impression in each row. based on the calculated treatment effects y_i s
     Inputs: 
@@ -627,24 +701,42 @@ def find_optimal_split_ads(row, y_cols):
         - chosen_ads: a list of ads to be shown
         - chosen_ad_ys: a list of the corresponding treatment effects
     """
-
     chosen_ad_ys_actual = []
+    chosen_ad_revs_actual = []
+    y_cols = row.filter(regex=r'^y_.*_s$', axis=0)
+    rev_cols = row.filter(regex=r'^rev_.*_s', axis=0)
+
     # sort the values by the value of the criteria
-    sorted_ads = row[y_cols].sort_values(ascending=False).index.to_list()
-    l = min(row['ads_on_page'], config.max_ads_per_page)    # number of ads to be shown on each visit
-    chosen_ads = sorted_ads[0 : l]
+    if criteria == "CTR":
+        sorted_ads = row[y_cols.index].sort_values(ascending=False).index.to_list()
+        l = min(row['ads_on_page'], config.max_ads_per_page)    # number of ads to be shown on each visit
+        chosen_ads = sorted_ads[0 : l]
+        chosen_ads = [int(element[2: -2]) for element in chosen_ads] # this will turn y_25_s into 25!
+
+    if criteria == "revenue":
+        sorted_ads = row[rev_cols.index].sort_values(ascending=False).index.to_list()
+        l = min(row['ads_on_page'], config.max_ads_per_page)    # number of ads to be shown on each visit  
+        chosen_ads = sorted_ads[0 : l]
+        chosen_ads = [int(element[4: -2]) for element in chosen_ads] # this will turn rev_25_s into 25!
+
+
     # creates a list of chosen ad ranks
-    chosen_ads = [int(element[2: -2]) for element in chosen_ads] # this will turn y_25_s into 25!
-    chosen_ad_ys_split = row[y_cols].sort_values(ascending=False).values[0:l]
+    chosen_ad_ys_split = y_cols.sort_values(ascending=False).values[0:l]
+    chosen_ad_revs_split = rev_cols.sort_values(ascending=False).values[0:l]
+
     for chosen_ad in chosen_ads:
         y_var_name = f"y_{chosen_ad}"
         chosen_ad_ys_actual.append(row[y_var_name])
 
-    return chosen_ads, chosen_ad_ys_split, chosen_ad_ys_actual
+        rev_var_name = f"rev_{chosen_ad}"
+        chosen_ad_revs_actual.append(row[rev_var_name])
+
+    return chosen_ads, chosen_ad_ys_split, chosen_ad_revs_split, chosen_ad_ys_actual, chosen_ad_revs_actual
 
 
 
-def create_chosen_ad_columns_split(data, split_no, user_visit_no):
+    
+def create_chosen_ad_columns_split(data, split_no, user_visit_no, criteria): 
     """
     This function finds the optimal ads for the subsection of "data" for which user_visit_no == user_visit_no
     The chosen ads and their corresponding click rates are saved in 'chosen_ad_{ad}' and 'chosen_ad_y_{ad}'
@@ -657,20 +749,31 @@ def create_chosen_ad_columns_split(data, split_no, user_visit_no):
 
     for index, row in data[(data['user_visit_no'] == user_visit_no) & (data['split'] == split_no)].iterrows():
         
-        chosen_ads, chosen_ad_ys_split, chosen_ad_ys_actual = find_optimal_split_ads(row, y_cols)
+        chosen_ads, chosen_ad_ys_split, chosen_ad_revs_split, chosen_ad_ys_actual, chosen_ad_revs_actual = find_optimal_split_ads(row, criteria)
         chosen_ads = [int(element) for element in chosen_ads]
         l = len(chosen_ads)
         last_chosen_ad_name = f"chosen_ad_{l}"
         # last_chosen_ad_te_name = f"chosen_ad_te_{l}"
         last_chosen_ad_y_name_split = f"chosen_ad_y_{l}_s"
         last_chosen_ad_y_name_actual = f"chosen_ad_y_{l}"
+        last_chosen_ad_rev_name_split = f"chosen_ad_rev_{l}_s"
+        last_chosen_ad_rev_name_actual = f"chosen_ad_rev_{l}"
         data.loc[index, 'chosen_ad_1': last_chosen_ad_name] = chosen_ads
         data.loc[index, 'chosen_ad_y_1_s' : last_chosen_ad_y_name_split] = chosen_ad_ys_split
+        data.loc[index, 'chosen_ad_rev_1_s' : last_chosen_ad_rev_name_split] = chosen_ad_revs_split
         data.loc[index, 'chosen_ad_y_1' : last_chosen_ad_y_name_actual] = chosen_ad_ys_actual
+        data.loc[index, 'chosen_ad_rev_1' : last_chosen_ad_rev_name_actual] = chosen_ad_revs_actual
         data.at[index, 'num_ads'] = int(l)
         # if index % 10000 == 0:
         #     print(f"index {index} done!")
-        
+
+
+
+
+
+
+       
+
 # def calc_base_ad_actual_ctr(data, split_no, user_visit_no):
 #     """
 #     This function calculates E(y0|X=x) for the subset of DataFrame "data" for which the "user_visit_no" is a specific number.
@@ -799,6 +902,7 @@ def update_clicks_on_main_and_split(data, split_no, user_visit_no):
             data.loc[((data['global_token_new'] == row['global_token_new']) & (data['user_visit_no'] > row['user_visit_no']) & (data['split'] == row['split'])), col_name_split] = int(row[col_name_split] + data.loc[index, click_dummy_var]) # update only if it is on the same split (platform)
         data.loc[((data['global_token_new'] == row['global_token_new']) & (data['user_visit_no'] > row['user_visit_no'])), 'previous_clicks_all_ads'] = int(row['previous_clicks_all_ads'] + total_clicks_on_impression)
         data.loc[((data['global_token_new'] == row['global_token_new']) & (data['user_visit_no'] > row['user_visit_no']) & (data['split'] == row['split'])), 'previous_clicks_all_ads_s'] = int(row['previous_clicks_all_ads'] + total_clicks_on_impression)  # update only if it is on the same split (platform)
+
 
 
 

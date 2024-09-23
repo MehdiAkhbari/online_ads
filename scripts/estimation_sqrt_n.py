@@ -1,20 +1,23 @@
 from propensity_model import PropensityModel
 from utils import *
 
-
-split_no = 7
+subsampling_ratio = 0.8
 
 # read data
-# file_name = f"Estimation Data - Full Model - Monopoly.dta"
-file_name = f"Estimation Data - Full Model - Split {split_no}.dta"
+file_name = f"Estimation Data - Full Model - Monopoly.dta"
+# file_name = f"Estimation Data - Full Model - Split {split_no}.dta"
 file_dir = "..\\data\\Full Model\\"
 file_dir_name = file_dir + file_name
-data = pd.read_stata(file_dir_name)
+full_data = pd.read_stata(file_dir_name)
+
+rand = np.random.RandomState(42)
+full_data['rand'] = rand.uniform(size=len(full_data))
+data= full_data[full_data['rand'] < subsampling_ratio]
+
 # prepare data for estmation
 prepare_data(data, base_ad=50, max_ad=100)
 # extract advertiser ranks
 ranks_list = extract_ranks(data)
-
 
 
 with open("..\\results\\main_scenario\\ranks_list.pickle", "wb") as file:
@@ -33,7 +36,12 @@ X_treat_indices = ['sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5',
 
 X_treat_indices_nums = [X.columns.get_loc(col) for col in X_treat_indices if col in X.columns]
 
-ranks_list = [rank for rank in ranks_list if rank > 10]
+
+
+
+# ranks_list = [rank for rank in ranks_list if rank < 10]
+ranks_list = [9]
+
 
 
 for rank in ranks_list:
@@ -92,11 +100,9 @@ for rank in ranks_list:
     finish_time = time.perf_counter()
     print(f"finished fitting the model in {finish_time - start_time} seconds")
 
-    
+
     # save the model
-    # file_name = f"..\\results\\Full Model\\Monopoly\\CF - Rank {rank}.pkl"
-    file_name = f"..\\results\\Full Model\\Split {split_no}\\CF - Rank {rank}.pkl"
+    file_name = f"..\\results\\Full Model\\Root N - Random\\Subsampling Ratio = {subsampling_ratio}\\CF - Rank {rank}.pkl"
     joblib.dump(cf, file_name)
     finish_time_1 = time.perf_counter()
     print(f"finished rank {rank} in {finish_time_1 - start_time_1} seconds")
-
