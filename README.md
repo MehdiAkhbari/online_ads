@@ -23,10 +23,11 @@ pip install -e ".[notebooks]"
 python -m adsim.estimate --scenario monopoly
 python -m adsim.estimate --scenario split --split 7
 python -m adsim.estimate --scenario split --split 8
-python scripts/base_ad_ctr_estimation.py
+python -m adsim.simulate.base_ad_helpers
 
 # 4. run the simulation
-python scripts/monopoly_simulation.py        # or duopoly_simulation.py
+python -m adsim.simulate.monopoly        # or adsim.simulate.duopoly
+                                         # or adsim.simulate.duopoly_root_n
 
 # 5. analyse the outputs in scripts/*.ipynb
 ```
@@ -71,17 +72,19 @@ scripts/Sample Size Analysis copy*.ipynb
 
 | Path | What lives there |
 |---|---|
-| `adsim/` | Installable Python package (`pip install -e .`). Canonical home for all shared code. |
+| `adsim/` | Installable Python package (`pip install -e .`). Canonical home for all importable + runnable code. |
 | `adsim/paths.py` | `REPO_ROOT`, `DATA_DIR`, `RESULTS_DIR` (overridable via env vars). |
 | `adsim/config.py` | Static knobs (`split_no_1/2`, `my_criteria`, ...), `ranks_list`, and explicit forest loaders. **Importing it does no I/O** — call `load_helpers()` / `load_monopoly_forests()` / `load_split_forests(n)` explicitly when you need the artifacts. |
-| `adsim/utils.py` | Estimation helpers (`define_xyt`, `prepare_data`, `m_model_best_estimator`, ...) and per-step simulation functions (`calc_tes`, `update_clicks`, `simulate_monopoly`, ...). |
+| `adsim/utils.py` | Estimation helpers (`define_xyt`, `prepare_data`, `m_model_best_estimator`, ...) and per-step simulation primitives (`calc_tes`, `update_clicks`, `simulate_monopoly`, ...). |
 | `adsim/propensity_model.py` | `PropensityModel`, the T-model used by `CausalForestDML`. |
-| `scripts/` | Runnable estimation, simulation, and analysis entry points. Imports from `adsim`. |
-| `scripts/check_old_pickles.py` | Verifies whether old `CF - Rank *.pkl` artifacts still load in this env. |
+| `adsim/estimate.py` | `python -m adsim.estimate` — fit per-rank causal forests (one CLI for all four scenarios). |
+| `adsim/simulate/` | `python -m adsim.simulate.{base_ad_helpers,monopoly,duopoly,duopoly_root_n}` — forward simulation entry points. |
+| `adsim/simulate/legacy/` | `python -m adsim.simulate.legacy.{simulation,simulation_parallel}` — older "Last 2 Days" simulations, kept for reference. |
+| `scripts/check_old_pickles.py` | Standalone tool: verifies whether old `CF - Rank *.pkl` artifacts still load in this env. |
+| `scripts/ranks_list.pickle` | Canonical input artifact (96 advertiser ranks). |
+| `notebooks/` | Analysis notebooks. |
 | `tests/` | Pytest tests. (Currently a stub — see [cleanup tasks](#known-cleanup-tasks).) |
 | `data/`, `results/` | **Not in git.** Populate locally before running anything. |
-
-`scripts/` no longer contains a private `utils.py`/`config.py`/`propensity_model.py` — they live in `adsim/`.
 
 ---
 
@@ -185,7 +188,7 @@ Run `python -m adsim.estimate --help` for the full list.
 ### 2. Fit the base-ad y0 helpers
 
 ```bash
-python scripts/base_ad_ctr_estimation.py
+python -m adsim.simulate.base_ad_helpers
 ```
 
 Outputs: `results/Full Model/m1.pkl`, `results/Full Model/e1.pkl`.
@@ -193,10 +196,12 @@ Outputs: `results/Full Model/m1.pkl`, `results/Full Model/e1.pkl`.
 ### 3. Run the simulation
 
 ```bash
-python scripts/monopoly_simulation.py            # monopoly
-python scripts/duopoly_simulation.py             # duopoly / split 7+8
-python scripts/duopoly_simulation_sqrt_n.py      # duopoly under Root-N
+python -m adsim.simulate.monopoly                # monopoly
+python -m adsim.simulate.duopoly                 # duopoly / split 7+8
+python -m adsim.simulate.duopoly_root_n          # duopoly under Root-N
 ```
+
+Each takes `--processes N`, `--data PATH`, `--vals-data PATH`, and (where applicable) `--criteria {CTR,revenue}`, `--split-1 N`, `--split-2 N`. Run with `--help` for the full list.
 
 Outputs: `results/Full Model/Simulation Results/Simluation Results - * - chunk N.dta` (one file per worker).
 
