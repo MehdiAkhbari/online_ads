@@ -20,7 +20,9 @@ pip install -e ".[notebooks]"
 # 2. drop the input .dta files under ./data/ (see "Required input data")
 
 # 3. fit the causal forests (slow — hours per scenario)
-python scripts/estimation.py
+python -m adsim.estimate --scenario monopoly
+python -m adsim.estimate --scenario split --split 7
+python -m adsim.estimate --scenario split --split 8
 python scripts/base_ad_ctr_estimation.py
 
 # 4. run the simulation
@@ -153,19 +155,32 @@ From the repo root, with `.venv` activated.
 
 ### 1. Fit the per-rank causal forests (slow — hours per scenario)
 
+A single CLI entrypoint covers all four scenarios:
+
 ```bash
-python scripts/estimation.py            # split 7
-# variants for the other scenarios:
-python scripts/estimation2.py           # split 7, ranks > 10 (continuation run)
-python scripts/estimation3.py           # split 6 + Root-N
-python scripts/estimation_split_5.py    # legacy: split 5, LogisticRegression PropensityModel
-python scripts/estimation_split_6.py    # legacy: split 6, LogisticRegression PropensityModel
-python scripts/estimation_sqrt_n.py     # subsampled monopoly (sample-size scenario)
+# Monopoly
+python -m adsim.estimate --scenario monopoly
+
+# Duopoly / split (one job per split)
+python -m adsim.estimate --scenario split --split 7
+python -m adsim.estimate --scenario split --split 8
+
+# Root-N split
+python -m adsim.estimate --scenario split-root-n --split 6
+
+# Sample-size (subsampled monopoly)
+python -m adsim.estimate --scenario sqrt-n --subsample-ratio 0.8
 ```
 
-Outputs: `results/Full Model/{Monopoly,Split N,Split N - Root N,Root N - Random/...}/CF - Rank {r}.pkl`.
+Outputs land under `results/Full Model/<scenario_dir>/CF - Rank {r}.pkl`.
 
-> The `estimation*.py` family are individual experiment runs; we plan to collapse these into a single CLI (`--scenario`, `--split`, `--data`, `--out`). See [cleanup tasks](#known-cleanup-tasks).
+The CLI is **HPC-friendly**:
+- **Auto-resumes**: skips ranks whose pickle already exists. Pass `--force` to override. Re-running a job after a transient failure is just re-submitting it.
+- **Filtering**: `--ranks 1,2,3` (explicit), `--ranks-filter "rank > 10"` (Python expression on `rank`, recovers the old `estimation2.py` continuation behaviour), or `--limit N` (cap to first N ranks).
+- **Structured logs**: each rank prints scenario, walltime, and output path.
+- **`--dry-run`** prints what would run without fitting anything.
+
+Run `python -m adsim.estimate --help` for the full list.
 
 ### 2. Fit the base-ad y0 helpers
 
@@ -219,7 +234,6 @@ This is the contract the simulation scripts rely on.
 
 ## Known cleanup tasks
 
-- [ ] Collapse the `estimation*.py` family into a single parameterised script.
 - [ ] Add real tests under `tests/` — `tests/test_utils.py` is currently a stub.
 - [ ] The `predict_proba(...).reshape(-1, 1)` in `calc_base_ad_ctr_vector` is suspicious (predict_proba returns `(n, 2)`); audit before re-running.
 - [ ] Hardcoded chunk sizes (`1620000 / n_processes`, `820000`, `300000`) in the simulation scripts. Make them either CLI args or auto-derived from `data.global_token_new.nunique()`.
