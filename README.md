@@ -60,10 +60,10 @@ results/Full Model/Simulation Results/Simluation Results - * - chunk N.dta
         │
         ▼   notebooks
 notebooks/analysis/merge_simulation_results.ipynb     → combines chunks
-notebooks/analysis/Results Analysis.ipynb             → main figures/tables
+notebooks/analysis/results_analysis.ipynb             → main figures/tables
 notebooks/analysis/advertiser_welfare_analysis.ipynb
 notebooks/analysis/ctr_vs_repeat.ipynb
-notebooks/sample_size/Sample Size Analysis*.ipynb
+notebooks/sample_size/sample_size_analysis.ipynb
 ```
 
 ---
@@ -82,9 +82,9 @@ notebooks/sample_size/Sample Size Analysis*.ipynb
 | `adsim/simulate/legacy/` | `python -m adsim.simulate.legacy.{simulation,simulation_parallel}` — older "Last 2 Days" simulations, kept for reference. |
 | `scripts/check_old_pickles.py` | Standalone tool: verifies whether old `CF - Rank *.pkl` artifacts still load in this env. |
 | `scripts/ranks_list.pickle` | Canonical input artifact (96 advertiser ranks). |
-| `notebooks/analysis/` | Canonical / paper-ready analysis notebooks (`Results Analysis`, `advertiser_welfare_analysis`, `ctr_vs_repeat`, `Subject Correlation Matrix`, `merge_simulation_results`). |
-| `notebooks/sample_size/` | Sample-size scenario analyses. Contains four variants (`Sample Size Analysis.ipynb` plus `copy 2/3/4`); the relationship between them needs a one-time audit. |
-| `notebooks/exploration/` | Earlier exploratory / scratch notebooks (`test*.ipynb`, `Two Ads Estimation*`, `Model Estimation for Ads 1, 2`, etc.). Not part of the canonical pipeline; kept for reference. |
+| `notebooks/analysis/` | Canonical / paper-ready analysis notebooks: `results_analysis`, `advertiser_welfare_analysis`, `ctr_vs_repeat`, `subject_correlation_matrix`, `merge_simulation_results`. |
+| `notebooks/sample_size/` | Sample-size sensitivity aggregation: `sample_size_analysis.ipynb`. |
+| `notebooks/exploration/` | Pairwise-estimation studies that produce paper artifacts (Shapley plots, LaTeX summaries) outside the canonical per-rank pipeline: `pairwise_estimation_ad_1_vs_2.ipynb`, `pairwise_estimation_ad_1_vs_3_full_week.ipynb`. See `notebooks/README.md` for details. |
 | `tests/` | Pytest tests. (Currently a stub — see [cleanup tasks](#known-cleanup-tasks).) |
 | `data/`, `results/` | **Not in git.** Populate locally before running anything. |
 
@@ -212,8 +212,8 @@ Outputs: `results/Full Model/Simulation Results/Simluation Results - * - chunk N
 Open notebooks under `notebooks/analysis/` (with `jupyter lab`):
 
 1. `notebooks/analysis/merge_simulation_results.ipynb` — combine the per-chunk `.dta` outputs into one DataFrame.
-2. `notebooks/analysis/Results Analysis.ipynb` — main figures / tables.
-3. `notebooks/analysis/advertiser_welfare_analysis.ipynb`, `ctr_vs_repeat.ipynb`, `Subject Correlation Matrix.ipynb`.
+2. `notebooks/analysis/results_analysis.ipynb` — main figures / tables.
+3. `notebooks/analysis/advertiser_welfare_analysis.ipynb`, `ctr_vs_repeat.ipynb`, `subject_correlation_matrix.ipynb`.
 4. Sample-size scenario: `notebooks/sample_size/`.
 5. Earlier exploratory work: `notebooks/exploration/` (not part of the canonical pipeline).
 
