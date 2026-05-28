@@ -3,3 +3,9 @@ results
 __pycache__
 .ipynb_checkpoints
 *.egg-info
+.venv
+build
+dist
+.pytest_cache
+.ruff_cache
+.DS_Store
