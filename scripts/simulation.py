@@ -17,6 +17,7 @@ import pickle
 
 
 import config
+from adsim.paths import DATA_DIR, RESULTS_DIR
 from utils import *
 
 
@@ -32,7 +33,7 @@ max_adv_rank = 100
 max_visit_no = 100 # max number of page visits by each user
 
 # read data
-data = pd.read_stata("..\\data\\Simulation Data - Last 2 Days.dta")
+data = pd.read_stata(DATA_DIR / "Simulation Data - Last 2 Days.dta")
 
 start_time_main = time.perf_counter()
 
@@ -108,7 +109,8 @@ for i in range(1, n_chunks+1):  # Assuming DataFrames are named df1, df2, ..., d
         print(f"DataFrame {df_name} not found.")  # Handle missing DataFrames
 
 # Save to file
-combined_df.to_stata("Simulated Data.dta")
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+combined_df.to_stata(RESULTS_DIR / "Simulated Data.dta")
 
 
 finish_time = time.perf_counter()

@@ -1,3 +1,4 @@
+from adsim.paths import DATA_DIR, RESULTS_DIR
 from propensity_model import PropensityModel
 from utils import *
 
@@ -5,19 +6,18 @@ from utils import *
 split_no = 7
 
 # read data
-# file_name = f"Estimation Data - Full Model - Monopoly.dta"
+# file_name = "Estimation Data - Full Model - Monopoly.dta"
 file_name = f"Estimation Data - Full Model - Split {split_no}.dta"
-file_dir = "..\\data\\Full Model\\"
-file_dir_name = file_dir + file_name
-data = pd.read_stata(file_dir_name)
+data = pd.read_stata(DATA_DIR / "Full Model" / file_name)
 # prepare data for estmation
 prepare_data(data, base_ad=50, max_ad=100)
 # extract advertiser ranks
 ranks_list = extract_ranks(data)
 
 
-
-with open("..\\results\\main_scenario\\ranks_list.pickle", "wb") as file:
+_ranks_list_path = RESULTS_DIR / "main_scenario" / "ranks_list.pickle"
+_ranks_list_path.parent.mkdir(parents=True, exist_ok=True)
+with open(_ranks_list_path, "wb") as file:
     pickle.dump(ranks_list, file)
 
 # drop rank 0 (based ad) from the list, for the base ad we don't calculate treatment effect
@@ -94,9 +94,10 @@ for rank in ranks_list:
 
     
     # save the model
-    # file_name = f"..\\results\\Full Model\\Monopoly\\CF - Rank {rank}.pkl"
-    file_name = f"..\\results\\Full Model\\Split {split_no}\\CF - Rank {rank}.pkl"
-    joblib.dump(cf, file_name)
+    # _out = RESULTS_DIR / "Full Model" / "Monopoly" / f"CF - Rank {rank}.pkl"
+    _out = RESULTS_DIR / "Full Model" / f"Split {split_no}" / f"CF - Rank {rank}.pkl"
+    _out.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(cf, _out)
     finish_time_1 = time.perf_counter()
     print(f"finished rank {rank} in {finish_time_1 - start_time_1} seconds")
 

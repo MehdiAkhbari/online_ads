@@ -19,6 +19,7 @@ import pickle
 
 
 import config
+from adsim.paths import DATA_DIR, RESULTS_DIR
 from utils import *
 
 
@@ -44,8 +45,9 @@ split_no_2 = config.split_no_2
 
 
 # read data
-data = pd.read_stata(f"..\\data\\Full Model\\Simulation Data - Full Model - Split {split_no_1} {split_no_2} - Subsample.dta")
-vals_data = pd.read_stata(f"..\\data\\Full Model\\Advertiser Valuations.dta")
+_full_data_dir = DATA_DIR / "Full Model"
+data = pd.read_stata(_full_data_dir / f"Simulation Data - Full Model - Split {split_no_1} {split_no_2} - Subsample.dta")
+vals_data = pd.read_stata(_full_data_dir / "Advertiser Valuations.dta")
 
 
 
@@ -132,13 +134,14 @@ def simulate_duopoly(data, vals_data, criteria):
 
 
 def simulate_and_save_chunk(chunk_data, chunk_id, criteria):
-    
     chunk_data = simulate_duopoly(chunk_data, vals_data, criteria)
     # Create a unique filename for the chunk
+    sim_results_dir = RESULTS_DIR / "Full Model" / "Simulation Results"
+    sim_results_dir.mkdir(parents=True, exist_ok=True)
     if criteria == "CTR":
-        filename = f"..\\results\\Full Model\\Simulation Results\\Simluation Results - Split {split_no_1} {split_no_2} - chunk {chunk_id+1}.dta"
+        filename = sim_results_dir / f"Simluation Results - Split {split_no_1} {split_no_2} - chunk {chunk_id+1}.dta"
     if criteria == "revenue":
-        filename = f"..\\results\\Full Model\\Simulation Results\\Simluation Results - Split {split_no_1} {split_no_2} Revenue Max - chunk {chunk_id+1}.dta"
+        filename = sim_results_dir / f"Simluation Results - Split {split_no_1} {split_no_2} Revenue Max - chunk {chunk_id+1}.dta"
 
     # Save the processed DataFrame to DTA
     chunk_data.to_stata(filename)

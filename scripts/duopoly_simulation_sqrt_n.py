@@ -17,6 +17,7 @@ import pickle
 
 
 import config
+from adsim.paths import DATA_DIR, RESULTS_DIR
 from utils import *
 
 
@@ -41,7 +42,10 @@ split_no_2 = config.split_no_2
 
 
 # read data
-data = pd.read_stata(f"..\\data\\Full Model\\Simulation Data - Full Model - Split {split_no_1} {split_no_2} - Root N - Subsample.dta")
+data = pd.read_stata(
+    DATA_DIR / "Full Model"
+    / f"Simulation Data - Full Model - Split {split_no_1} {split_no_2} - Root N - Subsample.dta"
+)
 
 
 
@@ -131,10 +135,11 @@ def simulate_duopoly_root_n(data):
 
 
 def simulate_and_save_chunk(chunk_data, chunk_id):
-    
-    chunk_data = simulate_duopoly_root_n(chunk_data) 
+    chunk_data = simulate_duopoly_root_n(chunk_data)
     # Create a unique filename for the chunk
-    filename = f"..\\results\\Full Model\\Simulation Results\\Simluation Results - Split {split_no_1} {split_no_2} - Root N - chunk {chunk_id+1}.dta"
+    sim_results_dir = RESULTS_DIR / "Full Model" / "Simulation Results"
+    sim_results_dir.mkdir(parents=True, exist_ok=True)
+    filename = sim_results_dir / f"Simluation Results - Split {split_no_1} {split_no_2} - Root N - chunk {chunk_id+1}.dta"
     # Save the processed DataFrame to DTA
     chunk_data.to_stata(filename)
 

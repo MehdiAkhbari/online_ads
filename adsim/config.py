@@ -1,46 +1,40 @@
-import joblib
+"""Module-level constants and the `ranks_list` shared by the simulations.
+
+`ranks_list` is the list of advertiser ranks the study iterates over, with
+the base ad (rank 0) and the >max-ad fringe (last entry) dropped.
+
+The pickle is looked up first under `RESULTS_DIR/main_scenario/`, and falls
+back to `scripts/ranks_list.pickle` (the version checked into the repo).
+"""
+
+from __future__ import annotations
+
 import pickle
-import os
-from adsim.constants import PATH_ROOT
+
+from adsim.paths import REPO_ROOT, RESULTS_DIR
 
 max_ads_per_page = 15
 
 split_no_1 = 7
 split_no_2 = 8
 
-# create ranks_list
-path_rank_list = os.path.join(PATH_ROOT, "results", "main_scenario", "ranks_list.pickle")
-with open(path_rank_list, "rb") as file:
-    ranks_list = pickle.load(file)
 
+_RANKS_LIST_CANDIDATES = [
+    RESULTS_DIR / "main_scenario" / "ranks_list.pickle",
+    REPO_ROOT / "scripts" / "ranks_list.pickle",
+]
+
+for _path in _RANKS_LIST_CANDIDATES:
+    if _path.is_file():
+        with open(_path, "rb") as _f:
+            ranks_list = pickle.load(_f)
+        break
+else:
+    raise FileNotFoundError(
+        "Could not find ranks_list.pickle. Looked in:\n  "
+        + "\n  ".join(str(p) for p in _RANKS_LIST_CANDIDATES)
+    )
+
+# Drop the base ad (rank 0) and the >max-ad fringe (last entry).
 ranks_list.pop(0)
 ranks_list.pop(-1)
-
-
-### comment the following lines (all of them) for estimation:
-
-# # import forests:
-# for rank in ranks_list:
-#     cf =  joblib.load(f'..\\results\\main_scenario\\CF - Rank {rank}.pkl')
-#     exec(f"cf_{rank} = cf")
-#     if rank % 20 == 0:
-#         print(f"rank {rank} model loaded!")
-
-
-# # import forests:
-# for rank in ranks_list:
-#     cf =  joblib.load(f'..\\results\\split {split_no_1}\\CF - Rank {rank}.pkl')
-#     exec(f"cf_{rank}_s1 = cf")
-#     if rank % 20 == 0:
-#         print(f"rank {rank} model loaded!")
-
-
-# for rank in ranks_list:
-#     cf =  joblib.load(f'..\\results\\split {split_no_2}\\CF - Rank {rank}.pkl')
-#     exec(f"cf_{rank}_s2 = cf")
-#     if rank % 20 == 0:
-#         print(f"rank {rank} model loaded!")
-
-# # import base ad ctr forest:
-# base_ad_y_model = joblib.load(f"..\\results\\main_scenario\\base_ad_y_model.pkl")
-

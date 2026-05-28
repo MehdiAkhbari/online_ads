@@ -23,8 +23,8 @@ base_ad = 50
 
 
 def read_data(data_set_name):
-    file_name = f"..\\data\\{data_set_name}"
-    data = pd.read_stata(file_name)
+    from adsim.paths import DATA_DIR
+    data = pd.read_stata(DATA_DIR / data_set_name)
     return data
 
 

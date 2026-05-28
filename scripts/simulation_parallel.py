@@ -15,6 +15,7 @@ import joblib
 import multiprocessing
 import pickle
 
+from adsim.paths import DATA_DIR, RESULTS_DIR
 from propensity_model import PropensityModel
 from utils import *
 import config
@@ -28,8 +29,8 @@ simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 pd.options.mode.chained_assignment = None
 
 for rank in ranks_list:
-    cf =  joblib.load(f'..\\results\\Full Model\\Monopoly\\CF - Rank {rank}.pkl')
-    exec(f"cf_{rank} = cf")
+    cf = joblib.load(RESULTS_DIR / "Full Model" / "Monopoly" / f"CF - Rank {rank}.pkl")
+    globals()[f"cf_{rank}"] = cf
     if rank % 20 == 0:
         print(f"rank {rank} model loaded!")
 
@@ -38,7 +39,7 @@ max_adv_rank = 100
 max_visit_no = 100 # max number of page visits by each user
 
 # read data
-data = pd.read_stata("..\\data\\Simulation Data - Last 2 Days - Merged Subjects Subsample.dta")
+data = pd.read_stata(DATA_DIR / "Simulation Data - Last 2 Days - Merged Subjects Subsample.dta")
 
 start_time_main = time.perf_counter()
 
@@ -106,7 +107,8 @@ if __name__ == '__main__':
         main_df = pd.DataFrame()
         for result_df in results: 
             main_df = pd.concat([main_df, result_df], ignore_index=True)
-        main_df.to_stata("..\\results\\Simluation Results - Subsample.dta")
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        main_df.to_stata(RESULTS_DIR / "Simluation Results - Subsample.dta")
 # finish_time = time.perf_counter()
 # print(f"Merging files finished in {finish_time - start_time} seconds!")
 
