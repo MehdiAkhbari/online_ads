@@ -918,7 +918,7 @@ def update_clicks_on_main_and_split(data, split_no, user_visit_no):
 
 # the only difference between the sqrt(n) and the other case is that clicks and repeats are updated on all data sets (main, and both splits) in the sqrt(n) case
 # but in the normal case the competing platform is not observing the user activity on the other platform.
-def update_repeats_on_main_and_split_sqrt_n(data, user_visit_no):
+def update_repeats_on_main_and_split_root_n(data, user_visit_no):
 
     """
     This function updates the number of previous impression on data after user visit number user_visit_no.
@@ -936,7 +936,7 @@ def update_repeats_on_main_and_split_sqrt_n(data, user_visit_no):
 
 
 
-def update_clicks_on_main_and_split_sqrt_n(data, user_visit_no):
+def update_clicks_on_main_and_split_root_n(data, user_visit_no):
     """
     This function updates the number of previous clicks on data after user visit number user_visit_no.
     For example, after a user visits a page for the first time, and clicks on ad 5, c_5 increases by 1 for all subsequent user impressions. 

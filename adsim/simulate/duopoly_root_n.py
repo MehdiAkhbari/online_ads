@@ -1,10 +1,10 @@
-"""Duopoly forward simulation under the Root-N (sqrt-n) scenario.
+"""Duopoly forward simulation under the Root-N scenario.
 
 Uses the Root-N variant of the per-split forests
-(`results/Full Model/Split {N} - Root N/...`) and the sqrt-n
+(`results/Full Model/Split {N} - Root N/...`) and the Root-N
 repeat/click update helpers. Saves one .dta per chunk.
 
-Replaces scripts/duopoly_simulation_sqrt_n.py.
+Replaces scripts/duopoly_simulation_sqrt_n.py (Root-N scenario).
 
 Run with:
     python -m adsim.simulate.duopoly_root_n
@@ -23,14 +23,14 @@ import pandas as pd
 
 from adsim import config
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from adsim.utils import (
+from adsim.simulation_steps import (
     calc_base_ad_split_ctr,
     calc_split_ctrs,
     calc_split_tes,
     create_chosen_ad_columns_split,
     create_chosen_split_ad_vars,
-    update_clicks_on_main_and_split_sqrt_n,
-    update_repeats_on_main_and_split_sqrt_n,
+    update_clicks_on_main_and_split_root_n,
+    update_repeats_on_main_and_split_root_n,
 )
 
 
@@ -63,11 +63,11 @@ def _simulate_duopoly_root_n(data: pd.DataFrame, split_no_1: int, split_no_2: in
         for split_no in (split_no_1, split_no_2):
             create_chosen_ad_columns_split(data, split_no=split_no, user_visit_no=i)
 
-        # Step 4: update repeats (sqrt-n updater).
-        update_repeats_on_main_and_split_sqrt_n(data, user_visit_no=i)
+        # Step 4: update repeats (Root-N updater).
+        update_repeats_on_main_and_split_root_n(data, user_visit_no=i)
 
-        # Step 5: update clicks (sqrt-n updater).
-        update_clicks_on_main_and_split_sqrt_n(data, user_visit_no=i)
+        # Step 5: update clicks (Root-N updater).
+        update_clicks_on_main_and_split_root_n(data, user_visit_no=i)
 
         log.info("repeat #%d finished in %.1fs", i, time.perf_counter() - repeat_t0)
 

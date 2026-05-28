@@ -16,7 +16,7 @@ Usage:
     python -m adsim.estimate --scenario split-root-n --split 6
 
     # Sample-size scenario (subsampled monopoly data)
-    python -m adsim.estimate --scenario sqrt-n --subsample-ratio 0.8
+    python -m adsim.estimate --scenario root-n --subsample-ratio 0.8
 
 Common flags:
     --ranks 1,2,3              Only fit these ranks (comma-separated).
@@ -56,7 +56,7 @@ from sklearn.ensemble import RandomForestRegressor
 from adsim import config
 from adsim.paths import DATA_DIR, RESULTS_DIR
 from adsim.propensity_model import PropensityModel
-from adsim.utils import (
+from adsim.simulation_steps import (
     cf_param_grid,
     define_xyt,
     e_model_best_estimator,
@@ -109,8 +109,8 @@ SCENARIOS: dict[str, Scenario] = {
         data_relpath_template="Full Model/Estimation Data - Full Model - Split {split} - Root N.dta",
         out_subdir_template="Split {split} - Root N",
     ),
-    "sqrt-n": Scenario(
-        name="sqrt-n",
+    "root-n": Scenario(
+        name="root-n",
         needs_split=False,
         data_relpath_template="Full Model/Estimation Data - Full Model - Monopoly.dta",
         out_subdir_template="Root N - Random/Subsampling Ratio = {subsample_ratio}",
@@ -218,7 +218,7 @@ def load_data_and_ranks(scenario: Scenario, split: int | None) -> tuple[pd.DataF
 
 
 def maybe_subsample(data: pd.DataFrame, scenario: Scenario, ratio: float, seed: int) -> pd.DataFrame:
-    if scenario.name != "sqrt-n":
+    if scenario.name != "root-n":
         return data
     rng = np.random.RandomState(seed)
     data = data.copy()
@@ -231,7 +231,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
     p.add_argument("--split", type=int, default=None)
     p.add_argument("--subsample-ratio", type=float, default=0.8,
-                   help="Only used for --scenario sqrt-n.")
+                   help="Only used for --scenario root-n.")
 
     p.add_argument("--ranks", type=str, default=None,
                    help="Comma-separated explicit ranks, e.g. '1,2,3'.")
@@ -244,7 +244,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--n-jobs", type=int, default=config.n_jobs)
     p.add_argument("--random-state", type=int, default=42)
     p.add_argument("--subsample-seed", type=int, default=42,
-                   help="Seed for the sqrt-n subsample (matches estimation_sqrt_n.py).")
+                   help="Seed for the root-n subsample.")
 
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("-v", "--verbose", action="count", default=0)

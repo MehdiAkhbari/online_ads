@@ -47,23 +47,23 @@ python scripts/check_old_pickles.py --results-dir /path/to/your/results
 data/Full Model/Estimation Data - Full Model - Monopoly.dta
 data/Full Model/Estimation Data - Full Model - Split {5,6,7,8}[ - Root N].dta
         │
-        ▼   scripts/estimation.py            (and split / sqrt-n variants)
+        ▼   python -m adsim.estimate --scenario {monopoly,split,split-root-n,root-n}
 results/Full Model/Monopoly/CF - Rank {r}.pkl                (~95 forests)
 results/Full Model/Split {N}[ - Root N]/CF - Rank {r}.pkl
         │
-        ▼   scripts/base_ad_ctr_estimation.py
+        ▼   python -m adsim.simulate.base_ad_helpers
 results/Full Model/{m1,e1}.pkl              (base-ad y0 helpers)
         │
-        ▼   scripts/{monopoly,duopoly}_simulation[_sqrt_n].py
+        ▼   python -m adsim.simulate.{monopoly,duopoly,duopoly_root_n}
             (loads forests via adsim.config.load_*_forests())
 results/Full Model/Simulation Results/Simluation Results - * - chunk N.dta
         │
         ▼   notebooks
-scripts/merge_simulation_results.ipynb       → combines chunks
-scripts/Results Analysis.ipynb               → main figures/tables
-scripts/advertiser_welfare_analysis.ipynb
-scripts/ctr_vs_repeat.ipynb
-scripts/Sample Size Analysis copy*.ipynb
+notebooks/analysis/merge_simulation_results.ipynb     → combines chunks
+notebooks/analysis/Results Analysis.ipynb             → main figures/tables
+notebooks/analysis/advertiser_welfare_analysis.ipynb
+notebooks/analysis/ctr_vs_repeat.ipynb
+notebooks/sample_size/Sample Size Analysis*.ipynb
 ```
 
 ---
@@ -174,7 +174,7 @@ python -m adsim.estimate --scenario split --split 8
 python -m adsim.estimate --scenario split-root-n --split 6
 
 # Sample-size (subsampled monopoly)
-python -m adsim.estimate --scenario sqrt-n --subsample-ratio 0.8
+python -m adsim.estimate --scenario root-n --subsample-ratio 0.8
 ```
 
 Outputs land under `results/Full Model/<scenario_dir>/CF - Rank {r}.pkl`.

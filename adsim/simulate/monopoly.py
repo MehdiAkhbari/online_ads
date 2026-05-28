@@ -25,7 +25,7 @@ import pandas as pd
 
 from adsim import config
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from adsim.utils import simulate_monopoly
+from adsim.simulation_steps import simulate_monopoly
 
 
 log = logging.getLogger("adsim.simulate.monopoly")

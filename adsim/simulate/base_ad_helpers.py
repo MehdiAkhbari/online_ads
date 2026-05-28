@@ -21,7 +21,7 @@ import joblib
 import pandas as pd
 
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from adsim.utils import base_ad, define_xyt
+from adsim.simulation_steps import base_ad, define_xyt
 
 
 log = logging.getLogger("adsim.simulate.base_ad_helpers")

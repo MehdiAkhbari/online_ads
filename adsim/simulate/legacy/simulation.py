@@ -22,7 +22,7 @@ import pandas as pd
 
 from adsim import config
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from adsim.utils import (
+from adsim.simulation_steps import (
     calc_base_ad_ctr,
     calc_ctrs,
     calc_tes,
