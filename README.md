@@ -5,11 +5,36 @@ Causal-inference-driven simulation of online ad serving. The study fits one
 data, then replays user visits forward with those forests in three scenarios
 — **monopoly**, **duopoly / split**, and **sample-size / Root-N** — and
 analyses the simulated outcomes (CTR, advertiser welfare, etc.) in a set of
-notebooks.
+Jupyter notebooks.
 
-> Status: research code mid-cleanup. The repo still contains several
-> near-duplicate scripts from individual experimental runs; see
-> [Known cleanup tasks](#known-cleanup-tasks) at the bottom.
+## TL;DR
+
+```bash
+# 1. set up the env (Python 3.11 required; with pyenv: pyenv install 3.11.4)
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip wheel setuptools
+pip install -r requirements.txt
+pip install -e ".[notebooks]"
+
+# 2. drop the input .dta files under ./data/ (see "Required input data")
+
+# 3. fit the causal forests (slow — hours per scenario)
+python scripts/estimation.py
+python scripts/base_ad_ctr_estimation.py
+
+# 4. run the simulation
+python scripts/monopoly_simulation.py        # or duopoly_simulation.py
+
+# 5. analyse the outputs in scripts/*.ipynb
+```
+
+If you have pre-existing pickled forests from a prior run, check whether
+they still load in this env before re-fitting:
+
+```bash
+python scripts/check_old_pickles.py --results-dir /path/to/your/results
+```
 
 ---
 
@@ -27,7 +52,7 @@ results/Full Model/Split {N}[ - Root N]/CF - Rank {r}.pkl
 results/Full Model/{m1,e1}.pkl              (base-ad y0 helpers)
         │
         ▼   scripts/{monopoly,duopoly}_simulation[_sqrt_n].py
-            (loads forests via scripts/config.py)
+            (loads forests via adsim.config.load_*_forests())
 results/Full Model/Simulation Results/Simluation Results - * - chunk N.dta
         │
         ▼   notebooks
@@ -38,61 +63,70 @@ scripts/ctr_vs_repeat.ipynb
 scripts/Sample Size Analysis copy*.ipynb
 ```
 
-The forests are loaded eagerly at import time inside `scripts/config.py`
-(via `joblib.load`) and made available as module-level names `cf_{rank}`,
-`cf_{rank}_s{split}`, etc. The simulation scripts then reach into those
-through `import config`.
-
 ---
 
 ## Layout
 
 | Path | What lives there |
 |---|---|
-| `adsim/` | Installable Python package (`pip install -e .`). The intended long-term home for shared utilities. Currently contains an older fork of `utils.py` that the scripts do not import yet. |
-| `scripts/` | The runnable research code (estimation, simulations, analysis notebooks). `scripts/utils.py` is the canonical utilities module today. |
-| `notebooks/` | A single scratch notebook (`test.ipynb`). |
-| `tests/` | Placeholder pytest skeleton. |
-| `data/`, `results/` | **Not in git.** Populate locally before running anything (see [Required input data](#required-input-data)). |
+| `adsim/` | Installable Python package (`pip install -e .`). Canonical home for all shared code. |
+| `adsim/paths.py` | `REPO_ROOT`, `DATA_DIR`, `RESULTS_DIR` (overridable via env vars). |
+| `adsim/config.py` | Static knobs (`split_no_1/2`, `my_criteria`, ...), `ranks_list`, and explicit forest loaders. **Importing it does no I/O** — call `load_helpers()` / `load_monopoly_forests()` / `load_split_forests(n)` explicitly when you need the artifacts. |
+| `adsim/utils.py` | Estimation helpers (`define_xyt`, `prepare_data`, `m_model_best_estimator`, ...) and per-step simulation functions (`calc_tes`, `update_clicks`, `simulate_monopoly`, ...). |
+| `adsim/propensity_model.py` | `PropensityModel`, the T-model used by `CausalForestDML`. |
+| `scripts/` | Runnable estimation, simulation, and analysis entry points. Imports from `adsim`. |
+| `scripts/check_old_pickles.py` | Verifies whether old `CF - Rank *.pkl` artifacts still load in this env. |
+| `tests/` | Pytest tests. (Currently a stub — see [cleanup tasks](#known-cleanup-tasks).) |
+| `data/`, `results/` | **Not in git.** Populate locally before running anything. |
+
+`scripts/` no longer contains a private `utils.py`/`config.py`/`propensity_model.py` — they live in `adsim/`.
 
 ---
 
 ## Setup
 
-Requires Python **3.11**.
+Requires Python **3.11**. With pyenv:
 
 ```bash
-# from the repo root
-python3.11 -m venv .venv
+pyenv install 3.11.4
+~/.pyenv/versions/3.11.4/bin/python3.11 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip wheel setuptools
 pip install -r requirements.txt
-pip install -e .              # installs the `adsim` package in editable mode
-# optional: notebook + dev extras
-pip install -e ".[notebooks,dev]"
+pip install -e .                       # installs the adsim package, editable
+pip install -e ".[notebooks,dev]"      # optional: jupyter, pytest, ruff
 ```
+
+Each new shell needs `source .venv/bin/activate`.
 
 Verify the install:
 
 ```bash
-python -c "from econml.dml import CausalForestDML; print('ok')"
+python -c "from econml.dml import CausalForestDML; import adsim; print(adsim.__version__)"
 ```
 
-### Notes on the env change
+### Configuring data + results paths
 
-The original env was a Windows conda export (`environment.yml`, Python
-3.8.18, scikit-learn 1.2.2, econml 0.14.1). It is **gone**. The new env
-targets Python 3.11 + scikit-learn 1.5 + econml 0.15. Pickled
-`CF - Rank *.pkl` artifacts produced under the old env are likely **not**
-loadable in this one — plan on re-fitting the forests once the input
-`.dta` files are in place.
+By default `adsim.paths` resolves:
+- `DATA_DIR    = <repo_root>/data`
+- `RESULTS_DIR = <repo_root>/results`
+
+To point either at an external location (shared filesystem, external drive, ...), set env vars before running:
+
+```bash
+export ADSIM_DATA_DIR=/Volumes/research/online_ads/data
+export ADSIM_RESULTS_DIR=/Volumes/research/online_ads/results
+```
+
+### Notes on env migration
+
+The original env was a Windows conda export (Python 3.8.18, scikit-learn 1.2.2, econml 0.14.1). The new env is Python 3.11 + scikit-learn 1.5 + econml 0.15. Pickled `CF - Rank *.pkl` artifacts produced under the old env are **likely not loadable** in this one — `scripts/check_old_pickles.py` will tell you for sure.
 
 ---
 
 ## Required input data
 
-None of these are checked in. They must be placed under `data/` before any
-script will run.
+None of these are checked in. Place them under `data/` (or under `$ADSIM_DATA_DIR`).
 
 ### Estimation inputs
 - `data/Full Model/Estimation Data - Full Model - Monopoly.dta`
@@ -109,72 +143,93 @@ script will run.
 - `data/Simulation Data - Last 2 Days.dta`
 - `data/Simulation Data - Last 2 Days - Merged Subjects Subsample.dta`
 
-The list of advertiser ranks the study iterates over lives in
-`scripts/ranks_list.pickle` (96 ranks: 0..101 with gaps).
+The list of advertiser ranks the study iterates over lives in `scripts/ranks_list.pickle` (96 ranks: 0..101 with gaps). `adsim.config.ranks_list` exposes it with rank 0 (base ad) and the >max-ad fringe entry already removed.
 
 ---
 
-## Running the study end-to-end
+## Reproducing the study
 
-> All paths in the existing scripts use Windows backslashes (e.g.
-> `..\\data\\Full Model\\...`). On macOS / Linux you currently need to
-> either run from `scripts/` with a symlinked or POSIX-equivalent layout,
-> or fix the paths. This is one of the [known cleanup tasks](#known-cleanup-tasks).
+From the repo root, with `.venv` activated.
 
-From the repo root, with `.venv` activated:
+### 1. Fit the per-rank causal forests (slow — hours per scenario)
 
 ```bash
-cd scripts
-
-# 1. Fit per-rank causal forests (monopoly + one split). Slow.
-python estimation.py
-
-# 2. Fit base-ad y0 helpers (m1.pkl, e1.pkl).
-python base_ad_ctr_estimation.py
-
-# 3. Replay user visits forward.
-python monopoly_simulation.py
-# or:
-python duopoly_simulation.py
+python scripts/estimation.py            # split 7
+# variants for the other scenarios:
+python scripts/estimation2.py           # split 7, ranks > 10 (continuation run)
+python scripts/estimation3.py           # split 6 + Root-N
+python scripts/estimation_split_5.py    # legacy: split 5, LogisticRegression PropensityModel
+python scripts/estimation_split_6.py    # legacy: split 6, LogisticRegression PropensityModel
+python scripts/estimation_sqrt_n.py     # subsampled monopoly (sample-size scenario)
 ```
 
-Then open the analysis notebooks in `scripts/`:
+Outputs: `results/Full Model/{Monopoly,Split N,Split N - Root N,Root N - Random/...}/CF - Rank {r}.pkl`.
 
-1. `merge_simulation_results.ipynb` — combine the per-chunk `.dta` outputs.
-2. `Results Analysis.ipynb` — main figures/tables.
-3. `advertiser_welfare_analysis.ipynb`, `ctr_vs_repeat.ipynb`, etc.
+> The `estimation*.py` family are individual experiment runs; we plan to collapse these into a single CLI (`--scenario`, `--split`, `--data`, `--out`). See [cleanup tasks](#known-cleanup-tasks).
+
+### 2. Fit the base-ad y0 helpers
+
+```bash
+python scripts/base_ad_ctr_estimation.py
+```
+
+Outputs: `results/Full Model/m1.pkl`, `results/Full Model/e1.pkl`.
+
+### 3. Run the simulation
+
+```bash
+python scripts/monopoly_simulation.py            # monopoly
+python scripts/duopoly_simulation.py             # duopoly / split 7+8
+python scripts/duopoly_simulation_sqrt_n.py      # duopoly under Root-N
+```
+
+Outputs: `results/Full Model/Simulation Results/Simluation Results - * - chunk N.dta` (one file per worker).
+
+### 4. Analyse
+
+Open notebooks under `scripts/` (with `jupyter lab`):
+
+1. `merge_simulation_results.ipynb` — combine the per-chunk `.dta` outputs into one DataFrame.
+2. `Results Analysis.ipynb` — main figures / tables.
+3. `advertiser_welfare_analysis.ipynb`, `ctr_vs_repeat.ipynb`, `Subject Correlation Matrix.ipynb`, `Sample Size Analysis copy*.ipynb`, etc.
 
 ---
 
-## Canonical scripts vs. variants
+## Working with the package programmatically
 
-The `scripts/` directory still contains several near-duplicates from
-individual experimental runs. The canonical ones to drive the pipeline:
+```python
+from adsim import config
+from adsim.utils import calc_tes, calc_base_ad_ctr, simulate_monopoly
 
-| Stage | Canonical | Variants kept for now |
-|---|---|---|
-| Estimation | `estimation.py` (split 7) | `estimation2.py` (rank > 10 only), `estimation3.py` (split 6 + Root-N), `estimation_split_5.py`, `estimation_split_6.py` (older logistic-regression PropensityModel), `estimation_sqrt_n.py` |
-| Base-ad CTR | `base_ad_ctr_estimation.py` | — |
-| Monopoly sim | `monopoly_simulation.py` | `simulation.py`, `simulation_parallel.py` (older "Last 2 Days" data) |
-| Duopoly sim | `duopoly_simulation.py` | `duopoly_simulation_sqrt_n.py` |
-| Shared utils | `scripts/utils.py` | `adsim/utils.py` (older fork, not imported by the scripts today) |
+# By default importing config does no I/O. Load what you need:
+config.load_helpers()
+config.load_monopoly_forests()
+# config.forests is now a dict[int, CausalForestDML]
+# config.helpers is now {"m1": ..., "e1": ...}
+
+# For the duopoly scenario:
+config.load_split_forests(config.split_no_1)
+config.load_split_forests(config.split_no_2)
+# config.split_forests[7], config.split_forests[8]
+```
+
+This is the contract the simulation scripts rely on.
 
 ---
 
 ## Known cleanup tasks
 
-- [ ] Fix Windows-only paths (`..\\data\\...`) so the code is portable.
-- [ ] Replace `adsim/constants.py` (hardcoded OneDrive path) with paths
-      derived from a `DATA_DIR` / `RESULTS_DIR` env var or config.
-- [ ] Reconcile `scripts/utils.py` (956 lines, current) with
-      `adsim/utils.py` (852 lines, older); pick one home.
-- [ ] Collapse the `estimation*.py` family into a single parameterised
-      script (`--scenario`, `--split`, `--data`, `--out`).
-- [ ] Delete leftover/stub files:
-      `scripts/Untitled-1.py`, `scripts/file.pkl` (5 bytes),
-      `scripts/propensity_score.pkl` (empty), `notebooks/test.ipynb`,
-      and the duplicate `Two Ads Estimation-3.ipynb` at the repo root.
-- [ ] Replace `exec(...)` / `globals()[...]` patterns (used to manage the
-      ~95 per-rank forests) with explicit dicts.
-- [ ] Add real tests under `tests/` — `tests/test_utils.py` is currently
-      a stub.
+- [ ] Collapse the `estimation*.py` family into a single parameterised script.
+- [ ] Add real tests under `tests/` — `tests/test_utils.py` is currently a stub.
+- [ ] The `predict_proba(...).reshape(-1, 1)` in `calc_base_ad_ctr_vector` is suspicious (predict_proba returns `(n, 2)`); audit before re-running.
+- [ ] Hardcoded chunk sizes (`1620000 / n_processes`, `820000`, `300000`) in the simulation scripts. Make them either CLI args or auto-derived from `data.global_token_new.nunique()`.
+
+---
+
+## Reproducibility notes for reviewers
+
+- **Pinned env.** `pyproject.toml` and `requirements.txt` pin Python 3.11 + scikit-learn 1.5 + econml 0.15 + pandas 2.2 + numpy 1.26 (compatible ranges). The original conda env (`environment.yml`) is gone.
+- **No hardcoded paths.** All file I/O goes through `adsim.paths.DATA_DIR` / `RESULTS_DIR`. Override with `ADSIM_DATA_DIR` / `ADSIM_RESULTS_DIR` env vars; default to repo-relative.
+- **Side-effect-free imports.** `import adsim.config` does no I/O. Forests are loaded only when an explicit `config.load_*_forests()` call runs. This means you can `import adsim.utils` from a notebook or test without needing a populated `results/` dir.
+- **Dropped string-execed code.** Per-rank lookups previously written with `exec(f"config.cf_{rank}.const_marginal_effect(...)")` are now plain dict lookups against `config.forests[rank]` / `config.split_forests[split][rank]`.
+- **Explicit verdict for old artifacts.** `scripts/check_old_pickles.py` reports OK / DEGRADED / INCOMPATIBLE for any pre-existing `CF - Rank *.pkl` so you don't have to guess whether a pickle from sklearn 1.2 / econml 0.14 will work here.
