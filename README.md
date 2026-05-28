@@ -82,7 +82,9 @@ scripts/Sample Size Analysis copy*.ipynb
 | `adsim/simulate/legacy/` | `python -m adsim.simulate.legacy.{simulation,simulation_parallel}` — older "Last 2 Days" simulations, kept for reference. |
 | `scripts/check_old_pickles.py` | Standalone tool: verifies whether old `CF - Rank *.pkl` artifacts still load in this env. |
 | `scripts/ranks_list.pickle` | Canonical input artifact (96 advertiser ranks). |
-| `notebooks/` | Analysis notebooks. |
+| `notebooks/analysis/` | Canonical / paper-ready analysis notebooks (`Results Analysis`, `advertiser_welfare_analysis`, `ctr_vs_repeat`, `Subject Correlation Matrix`, `merge_simulation_results`). |
+| `notebooks/sample_size/` | Sample-size scenario analyses. Contains four variants (`Sample Size Analysis.ipynb` plus `copy 2/3/4`); the relationship between them needs a one-time audit. |
+| `notebooks/exploration/` | Earlier exploratory / scratch notebooks (`test*.ipynb`, `Two Ads Estimation*`, `Model Estimation for Ads 1, 2`, etc.). Not part of the canonical pipeline; kept for reference. |
 | `tests/` | Pytest tests. (Currently a stub — see [cleanup tasks](#known-cleanup-tasks).) |
 | `data/`, `results/` | **Not in git.** Populate locally before running anything. |
 
@@ -207,11 +209,13 @@ Outputs: `results/Full Model/Simulation Results/Simluation Results - * - chunk N
 
 ### 4. Analyse
 
-Open notebooks under `scripts/` (with `jupyter lab`):
+Open notebooks under `notebooks/analysis/` (with `jupyter lab`):
 
-1. `merge_simulation_results.ipynb` — combine the per-chunk `.dta` outputs into one DataFrame.
-2. `Results Analysis.ipynb` — main figures / tables.
-3. `advertiser_welfare_analysis.ipynb`, `ctr_vs_repeat.ipynb`, `Subject Correlation Matrix.ipynb`, `Sample Size Analysis copy*.ipynb`, etc.
+1. `notebooks/analysis/merge_simulation_results.ipynb` — combine the per-chunk `.dta` outputs into one DataFrame.
+2. `notebooks/analysis/Results Analysis.ipynb` — main figures / tables.
+3. `notebooks/analysis/advertiser_welfare_analysis.ipynb`, `ctr_vs_repeat.ipynb`, `Subject Correlation Matrix.ipynb`.
+4. Sample-size scenario: `notebooks/sample_size/`.
+5. Earlier exploratory work: `notebooks/exploration/` (not part of the canonical pipeline).
 
 ---
 
