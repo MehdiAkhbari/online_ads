@@ -28,9 +28,9 @@ n_processes = 3
 
 
 
+from adsim import config
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from utils import *
-
+from adsim.utils import *
 
 criteria = config.my_criteria
 
@@ -41,6 +41,11 @@ pd.options.mode.chained_assignment = None
 filterwarnings("ignore", message="Loky-backed parallel loops cannot be called in a multiprocessing, setting n_jobs=1")
 
 
+# Load saved causal forests + base-ad helpers (m1, e1) before running the
+# simulation. The simulation step functions read them out of config.forests
+# / config.helpers.
+config.load_helpers()
+config.load_monopoly_forests()
 
 
 # read data

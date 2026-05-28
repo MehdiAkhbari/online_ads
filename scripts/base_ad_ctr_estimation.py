@@ -1,10 +1,8 @@
 # ## It took 35 mins to run this.
 
-import config
+from adsim import config
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from utils import *
-
-
+from adsim.utils import *
 start_time_1 = time.perf_counter()
 # read data
 file_name = "Estimation Data - Full Model - Monopoly.dta"

@@ -18,11 +18,9 @@ import pickle
 
 
 
-import config
+from adsim import config
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from utils import *
-
-
+from adsim.utils import *
 n_processes = 4
 
 criteria = config.my_criteria
@@ -42,6 +40,15 @@ max_visit_no = 100 # max number of page visits by each user
 
 split_no_1 = config.split_no_1
 split_no_2 = config.split_no_2
+
+
+# Load saved monopoly + per-split causal forests, plus base-ad helpers.
+# Simulation step functions read them out of config.forests /
+# config.split_forests / config.helpers.
+config.load_helpers()
+config.load_monopoly_forests()
+config.load_split_forests(split_no_1)
+config.load_split_forests(split_no_2)
 
 
 # read data

@@ -16,13 +16,9 @@ import multiprocessing
 import pickle
 
 
-import config
+from adsim import config
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from utils import *
-
-
-
-
+from adsim.utils import *
 # For ignoring the warnings
 from warnings import simplefilter, filterwarnings
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
@@ -39,6 +35,13 @@ n_processes = 4
 
 split_no_1 = config.split_no_1
 split_no_2 = config.split_no_2
+
+
+# Load monopoly + per-split (Root-N) causal forests, plus base-ad helpers.
+config.load_helpers()
+config.load_monopoly_forests()
+config.load_split_forests(split_no_1, root_n=True)
+config.load_split_forests(split_no_2, root_n=True)
 
 
 # read data

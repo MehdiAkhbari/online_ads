@@ -16,11 +16,9 @@ import multiprocessing
 import pickle
 
 
-import config
+from adsim import config
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from utils import *
-
-
+from adsim.utils import *
 # For ignoring the warnings
 from warnings import simplefilter 
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
@@ -31,6 +29,10 @@ pd.options.mode.chained_assignment = None
 base_ad = 50
 max_adv_rank = 100
 max_visit_no = 100 # max number of page visits by each user
+
+# Load helpers + monopoly forests before running the simulation.
+config.load_helpers()
+config.load_monopoly_forests()
 
 # read data
 data = pd.read_stata(DATA_DIR / "Simulation Data - Last 2 Days.dta")

@@ -1,8 +1,6 @@
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from propensity_model import PropensityModel
-from utils import *
-
-
+from adsim.propensity_model import PropensityModel
+from adsim.utils import *
 split_no = 6
 
 # read data

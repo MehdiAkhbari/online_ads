@@ -1,6 +1,4 @@
-from utils import *
-
-
+from adsim.utils import *
 split_no = 6
 
 

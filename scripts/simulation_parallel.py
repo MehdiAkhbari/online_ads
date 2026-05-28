@@ -16,23 +16,16 @@ import multiprocessing
 import pickle
 
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from propensity_model import PropensityModel
-from utils import *
-import config
-
-
-
-
+from adsim.propensity_model import PropensityModel
+from adsim.utils import *
+from adsim import config
 # For ignoring the warnings
 from warnings import simplefilter 
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 pd.options.mode.chained_assignment = None
 
-for rank in ranks_list:
-    cf = joblib.load(RESULTS_DIR / "Full Model" / "Monopoly" / f"CF - Rank {rank}.pkl")
-    globals()[f"cf_{rank}"] = cf
-    if rank % 20 == 0:
-        print(f"rank {rank} model loaded!")
+config.load_helpers()
+config.load_monopoly_forests()
 
 base_ad = 50
 max_adv_rank = 100
