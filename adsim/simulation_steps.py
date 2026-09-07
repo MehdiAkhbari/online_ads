@@ -62,13 +62,18 @@ param_grid = {
     'min_samples_split': [1000 , 2000, 5000]
 }
 
-# Define the hyperparameters to search over
+# Causal forest tuning grid. Unlike param_grid above, min_samples_split here
+# is deliberately NOT cross-validated across a range -- it's set from the
+# click-rate constraint (avg click rate ~0.1%, so leaves need ~10-20K rows to
+# see a reliable handful of clicks) rather than discovered by comparing
+# candidates. See docs/hyperparameter_choices.txt for the full rationale.
+# n_estimators and max_depth are intentionally absent: leaving them out of
+# this dict means cf.tune() never touches them, so they stay fixed at
+# whatever fit_one_rank's CausalForestDML(...) constructor call sets,
+# instead of tune() silently overwriting them after the search (it was
+# previously doing exactly that with n_estimators=300 here).
 cf_param_grid = {
-    # 'n_estimators': [100, 200, 300],
-    'n_estimators': [300],
-    'max_depth': [10, 20, 30],
-    'min_samples_split': [1000 , 2000, 5000],
-    # 'max_samples': [0.1, 0.2, 0.3]
+    'min_samples_split': [20000],
 }
 
 
@@ -112,7 +117,7 @@ def m_model_best_estimator(X, Y, param_grid, n_jobs=n_jobs):
 
 def e_model_best_estimator(X, T, param_grid, n_jobs=n_jobs):
     start_time = time.perf_counter()
-    e_model = PropensityModel()
+    e_model = PropensityModel(n_jobs=n_jobs)
 
     # Define a custom scorer using log_loss
     # log_loss_scorer = make_scorer(log_loss, greater_is_better=False, needs_proba=True)

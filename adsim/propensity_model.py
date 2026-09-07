@@ -49,7 +49,13 @@ class PropensityModel(BaseEstimator):
     def score(self, X, T):
         T_pred = self.predict(X)
         # return -log_loss(T, T_pred_proba)
-        return f1_score(T, T_pred)
+        # T is binary for the two-arm estimate.py path but multiclass
+        # (one class per advertiser rank) for estimate_joint.py; plain
+        # f1_score defaults to average="binary", which raises for >2
+        # classes. econml calls this internally during cf.tune()
+        # regardless of dataset size, so this must handle both.
+        average = "binary" if len(np.unique(T)) <= 2 else "macro"
+        return f1_score(T, T_pred, average=average)
 
 
     def get_params(self, deep=True):

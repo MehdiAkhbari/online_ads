@@ -129,8 +129,18 @@ def fit_one_rank(
     out_path: Path,
     n_jobs: int,
     random_state: int,
+    n_estimators: int = 500,
+    min_samples_split: int = 20000,
+    min_samples_leaf: int = 10000,
+    max_samples: int = 50000,
+    max_depth: int | None = 10,
 ) -> None:
-    """Fit one CausalForestDML for one advertiser rank and save it."""
+    """Fit one CausalForestDML for one advertiser rank and save it.
+
+    Default min_samples_split/min_samples_leaf/max_samples are sized off the
+    ~0.1% average click rate (see docs/hyperparameter_choices.txt), not
+    cross-validated -- cf_param_grid deliberately no longer searches these.
+    """
     df = (
         data[(data["advertiser_rank"] == 0) | (data["advertiser_rank"] == rank)]
         .reset_index(drop=True)
@@ -147,13 +157,14 @@ def fit_one_rank(
     cf = CausalForestDML(
         model_y=RandomForestRegressor(**best_params_m),
         model_t=PropensityModel(**best_params_e),
-        discrete_treatment="True",
+        discrete_treatment=True,
         criterion="het",
         n_jobs=n_jobs,
-        n_estimators=100,
-        min_samples_split=1000,
-        max_depth=20,
-        max_samples=0.01,
+        n_estimators=n_estimators,
+        min_samples_split=min_samples_split,
+        min_samples_leaf=min_samples_leaf,
+        max_depth=max_depth,
+        max_samples=max_samples,
         random_state=random_state,
         verbose=0,
     )
@@ -246,6 +257,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--subsample-seed", type=int, default=42,
                    help="Seed for the root-n subsample.")
 
+    p.add_argument("--n-estimators", type=int, default=500,
+                   help="Trees in the final causal forest. See "
+                        "docs/hyperparameter_choices.txt.")
+    p.add_argument("--min-samples-split", type=int, default=20000,
+                   help="Sized off the ~0.1%% avg click rate, not CV-searched.")
+    p.add_argument("--min-samples-leaf", type=int, default=10000,
+                   help="Sized off the ~0.1%% avg click rate, not CV-searched.")
+    p.add_argument("--max-samples", type=int, default=50000,
+                   help="Per-tree sample count (absolute, not a fraction of "
+                        "each rank's own size -- see docs/hyperparameter_choices.txt).")
+    p.add_argument("--max-depth", type=int, default=10,
+                   help="Safety cap only; min-samples-split/leaf are expected "
+                        "to bind well before this depth is reached.")
+
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("-v", "--verbose", action="count", default=0)
 
@@ -306,6 +331,11 @@ def main(argv: list[str] | None = None) -> int:
                 out_path=out_path,
                 n_jobs=args.n_jobs,
                 random_state=args.random_state,
+                n_estimators=args.n_estimators,
+                min_samples_split=args.min_samples_split,
+                min_samples_leaf=args.min_samples_leaf,
+                max_samples=args.max_samples,
+                max_depth=args.max_depth,
             )
             log.info("rank=%d DONE in %.1fs", rank, time.perf_counter() - t0)
             n_done += 1
