@@ -65,8 +65,11 @@ from pathlib import Path
 from adsim.estimate import SCENARIOS, load_data_and_ranks, select_ranks
 from adsim.paths import RESULTS_DIR
 
-# Calibrated on an 8-vCPU dev VM at n_estimators=100 with the current
-# hyperparameters; see module docstring and docs/hyperparameter_choices.txt.
+# Calibrated on an 8-vCPU dev VM at n_estimators=100 with the hyperparameters
+# in place before the N-adaptive rewrite (see docs/hyperparameter_choices.txt
+# and adsim/hyperparams.py) -- per-pair max_samples/leaf sizes now vary by
+# rank instead of being fixed, so these constants are stale until
+# re-calibrated against a real timed batch under the new rule.
 GRID_CONST, GRID_EXPONENT = 7.83811e-05, 1.2329
 TUNEFIT_CONST, TUNEFIT_EXPONENT = 1.12328e-05, 1.2934
 TUNEFIT_CALIBRATION_N_ESTIMATORS = 100

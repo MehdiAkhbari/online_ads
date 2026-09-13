@@ -1,6 +1,6 @@
 from sklearn.base import BaseEstimator
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import log_loss, make_scorer, f1_score
+from sklearn.metrics import log_loss
 import pandas as pd
 import numpy as np
 
@@ -47,15 +47,19 @@ class PropensityModel(BaseEstimator):
 
 
     def score(self, X, T):
-        T_pred = self.predict(X)
-        # return -log_loss(T, T_pred_proba)
-        # T is binary for the two-arm estimate.py path but multiclass
-        # (one class per advertiser rank) for estimate_joint.py; plain
-        # f1_score defaults to average="binary", which raises for >2
-        # classes. econml calls this internally during cf.tune()
-        # regardless of dataset size, so this must handle both.
-        average = "binary" if len(np.unique(T)) <= 2 else "macro"
-        return f1_score(T, T_pred, average=average)
+        # DML needs a calibrated probability, not a thresholded decision:
+        # with arm shares as lopsided as 150-vs-100,000 rows, a
+        # thresholded metric (the previous f1_score) will happily select
+        # a model that predicts the majority class everywhere. econml
+        # calls this internally during cf.tune() regardless of dataset
+        # size, and T is binary for the two-arm estimate.py path but
+        # multiclass (one class per advertiser rank) for
+        # estimate_joint.py; log_loss handles both natively, and
+        # labels=self.lr.classes_ keeps it well-defined even if a given
+        # scoring batch's T doesn't include every class the model saw
+        # during fit.
+        proba = self.predict_proba(X)
+        return -log_loss(T, proba, labels=self.lr.classes_)
 
 
     def get_params(self, deep=True):

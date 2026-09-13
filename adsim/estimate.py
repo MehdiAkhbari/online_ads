@@ -28,6 +28,15 @@ Common flags:
     --n-jobs N                 Cores for the M/E model grid search.
     --random-state SEED        Causal forest seed (default 42).
     --dry-run                  Print what would run, don't fit.
+    --focal-cap-ratio R        Cap each rank's rows at R x the base ad's
+                               rows before fitting (default 3.0).
+    --max-samples-cap N        Ceiling on the per-tree sample count
+                               (default 100_000).
+
+Most causal-forest hyperparameters (max_samples, min_samples_split,
+min_samples_leaf's starting value, max_depth) are derived per rank from
+that rank's own sample size rather than fixed -- see
+docs/hyperparameter_choices.txt and adsim.hyperparams.cf_hyperparams.
 
 Output:
     results/Full Model/<scenario_dir>/CF - Rank {r}.pkl
@@ -51,20 +60,18 @@ import joblib
 import numpy as np
 import pandas as pd
 from econml.dml import CausalForestDML
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.base import clone
 
 from adsim import config
-from adsim.paths import DATA_DIR, RESULTS_DIR
-from adsim.propensity_model import PropensityModel
-from adsim.simulation_steps import (
-    cf_param_grid,
-    define_xyt,
+from adsim.hyperparams import (
+    cf_hyperparams,
     e_model_best_estimator,
-    extract_ranks,
+    e_model_leaf_grid,
     m_model_best_estimator,
-    param_grid,
-    prepare_data,
+    m_model_leaf_grid,
 )
+from adsim.paths import DATA_DIR, RESULTS_DIR
+from adsim.simulation_steps import define_xyt, extract_ranks, prepare_data
 
 
 log = logging.getLogger("adsim.estimate")
@@ -130,47 +137,77 @@ def fit_one_rank(
     n_jobs: int,
     random_state: int,
     n_estimators: int = 500,
-    min_samples_split: int = 20000,
-    min_samples_leaf: int = 10000,
-    max_samples: int = 50000,
-    max_depth: int | None = 10,
+    max_depth: int = 3,
+    focal_cap_ratio: float = 3.0,
+    max_samples_cap: int = 100_000,
 ) -> None:
     """Fit one CausalForestDML for one advertiser rank and save it.
 
-    Default min_samples_split/min_samples_leaf/max_samples are sized off the
-    ~0.1% average click rate (see docs/hyperparameter_choices.txt), not
-    cross-validated -- cf_param_grid deliberately no longer searches these.
+    Every causal-forest hyperparameter except min_samples_leaf and
+    min_var_fraction_leaf (the only two worth cross-validating) is derived
+    from this pair's own (n_base, n_focal) via adsim.hyperparams.cf_hyperparams
+    -- see docs/hyperparameter_choices.txt for the full derivation. The
+    focal arm is also subsampled down to `focal_cap_ratio` x the base arm
+    before fitting: past that ratio the majority arm barely reduces
+    Var(tau_hat) but still consumes most of each tree's sample budget.
     """
-    df = (
-        data[(data["advertiser_rank"] == 0) | (data["advertiser_rank"] == rank)]
-        .reset_index(drop=True)
-        .copy()
+    base_mask = data["advertiser_rank"] == 0
+    focal_mask = data["advertiser_rank"] == rank
+    n_base = int(base_mask.sum())
+    n_focal = int(focal_mask.sum())
+
+    hp = cf_hyperparams(
+        n_base, n_focal,
+        focal_cap_ratio=focal_cap_ratio,
+        max_samples_cap=max_samples_cap,
+        n_estimators=n_estimators,
+        max_depth=max_depth,
     )
+
+    focal_df = data[focal_mask]
+    if hp.n_focal_used < n_focal:
+        focal_df = focal_df.sample(n=hp.n_focal_used, random_state=random_state)
+
+    df = pd.concat([data[base_mask], focal_df]).reset_index(drop=True)
     X, Y, T = define_xyt(df)
     T = T.apply(lambda x: 0 if x == 0 else 1)
 
+    click_rate = float(Y.mean())
+    rare_arm_rate = min(n_base, hp.n_focal_used) / hp.n_total
+    m_leaf_grid = m_model_leaf_grid(hp.n_total, click_rate)
+    e_leaf_grid = e_model_leaf_grid(hp.n_total, rare_arm_rate)
+
     t0 = time.perf_counter()
-    best_params_e, _ = e_model_best_estimator(X, T, param_grid, n_jobs=n_jobs)
-    best_params_m, _ = m_model_best_estimator(X, Y, param_grid, n_jobs=n_jobs)
-    log.info("rank=%d e/m grid search done in %.1fs", rank, time.perf_counter() - t0)
+    best_params_e, best_estimator_e = e_model_best_estimator(X, T, e_leaf_grid, n_jobs=n_jobs)
+    best_params_m, best_estimator_m = m_model_best_estimator(X, Y, m_leaf_grid, n_jobs=n_jobs)
+    log.info(
+        "rank=%d e/m grid search done in %.1fs (e_leaf=%s -> %s, m_leaf=%s -> %s)",
+        rank, time.perf_counter() - t0, e_leaf_grid, best_params_e, m_leaf_grid, best_params_m,
+    )
 
     cf = CausalForestDML(
-        model_y=RandomForestRegressor(**best_params_m),
-        model_t=PropensityModel(**best_params_e),
+        model_y=clone(best_estimator_m),
+        model_t=clone(best_estimator_e),
         discrete_treatment=True,
         criterion="het",
+        honest=True,
         n_jobs=n_jobs,
-        n_estimators=n_estimators,
-        min_samples_split=min_samples_split,
-        min_samples_leaf=min_samples_leaf,
-        max_depth=max_depth,
-        max_samples=max_samples,
+        n_estimators=hp.n_estimators,
+        min_samples_split=hp.min_samples_split,
+        min_samples_leaf=hp.min_samples_leaf_grid[0],
+        min_var_fraction_leaf=None,
+        max_depth=hp.max_depth,
+        max_samples=hp.max_samples,
+        min_balancedness_tol=hp.min_balancedness_tol,
         random_state=random_state,
         verbose=0,
     )
 
     t0 = time.perf_counter()
-    cf.tune(Y=Y, T=T, X=X, params=cf_param_grid)
+    cf.tune(Y=Y, T=T, X=X, params={
+        "min_samples_leaf": hp.min_samples_leaf_grid,
+        "min_var_fraction_leaf": hp.min_var_fraction_leaf_grid,
+    })
     log.info("rank=%d tune done in %.1fs", rank, time.perf_counter() - t0)
 
     t0 = time.perf_counter()
@@ -260,14 +297,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--n-estimators", type=int, default=500,
                    help="Trees in the final causal forest. See "
                         "docs/hyperparameter_choices.txt.")
-    p.add_argument("--min-samples-split", type=int, default=20000,
-                   help="Sized off the ~0.1%% avg click rate, not CV-searched.")
-    p.add_argument("--min-samples-leaf", type=int, default=10000,
-                   help="Sized off the ~0.1%% avg click rate, not CV-searched.")
-    p.add_argument("--max-samples", type=int, default=50000,
-                   help="Per-tree sample count (absolute, not a fraction of "
-                        "each rank's own size -- see docs/hyperparameter_choices.txt).")
-    p.add_argument("--max-depth", type=int, default=10,
+    p.add_argument("--focal-cap-ratio", type=float, default=3.0,
+                   help="Cap the focal rank's rows at this multiple of the "
+                        "base ad's rows before fitting. See "
+                        "docs/hyperparameter_choices.txt.")
+    p.add_argument("--max-samples-cap", type=int, default=100_000,
+                   help="Ceiling on the per-tree sample count "
+                        "(max_samples = min(this, pair_N // 2)). See "
+                        "docs/hyperparameter_choices.txt.")
+    p.add_argument("--max-depth", type=int, default=3,
                    help="Safety cap only; min-samples-split/leaf are expected "
                         "to bind well before this depth is reached.")
 
@@ -332,10 +370,9 @@ def main(argv: list[str] | None = None) -> int:
                 n_jobs=args.n_jobs,
                 random_state=args.random_state,
                 n_estimators=args.n_estimators,
-                min_samples_split=args.min_samples_split,
-                min_samples_leaf=args.min_samples_leaf,
-                max_samples=args.max_samples,
                 max_depth=args.max_depth,
+                focal_cap_ratio=args.focal_cap_ratio,
+                max_samples_cap=args.max_samples_cap,
             )
             log.info("rank=%d DONE in %.1fs", rank, time.perf_counter() - t0)
             n_done += 1
