@@ -1,4 +1,4 @@
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import log_loss
 import pandas as pd
@@ -12,10 +12,14 @@ X_treat_indices = ['sub_1', 'sub_2', 'sub_3', 'sub_4', 'sub_5',
 
 X_treat_indices_nums = range(19, 37)
 
-class PropensityModel(BaseEstimator):
+class PropensityModel(BaseEstimator, ClassifierMixin):
     def __init__(self, **kwargs):
         self.lr = RandomForestClassifier(**kwargs)
 
+
+    @property
+    def classes_(self):
+        return self.lr.classes_
 
     def predict_proba(self, X):
         if isinstance(X, pd.DataFrame):
