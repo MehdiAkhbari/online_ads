@@ -11,17 +11,14 @@ Typical usage:
     config.load_monopoly_forests()   # populates config.forests
     # then run simulations that read config.forests / config.helpers
 
-NOTE on forest storage
------------------------
-Each scenario is now fit with `adsim.estimate_joint` as ONE jointly-fit
-multi-treatment CausalForestDML, saved as a single `Joint CF.pkl` file
-(see that module's docstring) -- there are no more `CF - Rank {r}.pkl`
-files on disk. The loaders below call
-`adsim.estimate_joint.forests_dict_from_joint()`, which loads that one
-file once (cached process-wide) and returns lightweight in-memory
-per-rank views, so `config.forests[rank].const_marginal_effect(X)`
-(and the split / subsample equivalents) keep working exactly as
-before. `simulation_steps.py` needs no changes.
+Forest storage
+--------------
+Each scenario directory holds either one `CF - Rank {r}.pkl` per rank
+(written by `adsim.estimate`, the canonical pipeline) or a single
+`Joint CF.pkl` (written by `adsim.estimate_joint`). The loaders prefer the
+per-rank files and fall back to the joint file only when per-rank files
+are missing; either way `config.forests[rank].const_marginal_effect(X)`
+returns that rank's CATE.
 """
 from __future__ import annotations
 
@@ -94,6 +91,27 @@ def _full_model_dir() -> Path:
     return RESULTS_DIR / "Full Model"
 
 
+def _load_scenario_forests(base: Path, ranks: list[int]) -> tuple[dict[int, object], str]:
+    """Per-rank pickles if all are present, else `Joint CF.pkl` views."""
+    per_rank = {rank: base / f"CF - Rank {rank}.pkl" for rank in ranks}
+    missing = [rank for rank, path in per_rank.items() if not path.is_file()]
+    if not missing:
+        return {rank: joblib.load(path) for rank, path in per_rank.items()}, "per-rank pickles"
+
+    joint_path = base / "Joint CF.pkl"
+    if joint_path.is_file():
+        # Imported here to avoid a circular import (estimate_joint -> estimate -> config).
+        from adsim.estimate_joint import forests_dict_from_joint
+
+        return forests_dict_from_joint(joint_path, ranks=ranks), str(joint_path)
+
+    raise FileNotFoundError(
+        f"No forests for {len(missing)} of {len(ranks)} ranks in {base} "
+        f"(e.g. ranks {missing[:5]}) and no Joint CF.pkl. "
+        "Fit them with `python -m adsim.estimate --scenario ...`."
+    )
+
+
 def load_helpers(verbose: bool = False) -> dict[str, object]:
     """Load m1 (Y model) and e1 (T model) from `results/Full Model/`."""
     base = _full_model_dir()
@@ -108,21 +126,13 @@ def load_monopoly_forests(
     ranks: Iterable[int] | None = None,
     verbose: bool = True,
 ) -> dict[int, object]:
-    """Load the single jointly-fit forest from
-    `results/Full Model/Monopoly/Joint CF.pkl` and expose it as
-    `{rank: RankView}`, matching the previous per-rank interface.
-    """
-    # Imported here (not at module top) to avoid a circular import:
-    # adsim.estimate_joint imports from adsim.estimate, which imports
-    # adsim.config.
-    from adsim.estimate_joint import forests_dict_from_joint
-
+    """Load the monopoly forests from `results/Full Model/Monopoly/`."""
     base = _full_model_dir() / "Monopoly"
-    joint_path = base / "Joint CF.pkl"
     selected = list(ranks) if ranks is not None else ranks_list
-    forests.update(forests_dict_from_joint(joint_path, ranks=selected))
+    loaded, source = _load_scenario_forests(base, selected)
+    forests.update(loaded)
     if verbose:
-        print(f"loaded joint forest ({len(selected)} ranks) from {joint_path}")
+        print(f"loaded {len(selected)} monopoly forests from {base} ({source})")
     return forests
 
 
@@ -133,20 +143,15 @@ def load_split_forests(
     ranks: Iterable[int] | None = None,
     verbose: bool = True,
 ) -> dict[int, object]:
-    """Load the single jointly-fit split/duopoly forest for one split."""
-    from adsim.estimate_joint import forests_dict_from_joint
-
+    """Load one split's forests from `results/Full Model/Split {N}[ - Root N]/`."""
     suffix = " - Root N" if root_n else ""
     base = _full_model_dir() / f"Split {split_no}{suffix}"
-    joint_path = base / "Joint CF.pkl"
     selected = list(ranks) if ranks is not None else ranks_list
+    loaded, source = _load_scenario_forests(base, selected)
     bucket = split_forests.setdefault(split_no, {})
-    bucket.update(forests_dict_from_joint(joint_path, ranks=selected))
+    bucket.update(loaded)
     if verbose:
-        print(
-            f"loaded joint forest ({len(selected)} ranks) for split "
-            f"{split_no} from {joint_path}"
-        )
+        print(f"loaded {len(selected)} forests for split {split_no} from {base} ({source})")
     return bucket
 
 
@@ -155,18 +160,16 @@ def load_subsample_forests(
     ranks: Iterable[int] | None = None,
     verbose: bool = True,
 ) -> dict[int, object]:
-    """Load the single jointly-fit forest for the sample-size scenario."""
-    from adsim.estimate_joint import forests_dict_from_joint
-
+    """Load the sample-size scenario's forests for one subsampling ratio."""
     base = (
         _full_model_dir() / "Root N - Random"
         / f"Subsampling Ratio = {subsampling_ratio}"
     )
-    joint_path = base / "Joint CF.pkl"
     selected = list(ranks) if ranks is not None else ranks_list
-    subsample_forests.update(forests_dict_from_joint(joint_path, ranks=selected))
+    loaded, source = _load_scenario_forests(base, selected)
+    subsample_forests.update(loaded)
     if verbose:
-        print(f"loaded joint forest ({len(selected)} ranks) from {joint_path}")
+        print(f"loaded {len(selected)} subsample forests from {base} ({source})")
     return subsample_forests
 
 
