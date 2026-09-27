@@ -1,222 +1,236 @@
-HYPERPARAMETER CHOICES FOR THE CAUSAL FOREST (adsim.estimate)
+HYPERPARAMETER CHOICES FOR THE CAUSAL FORESTS (adsim.estimate)
 ================================================================
 
-This documents where min_samples_split, min_samples_leaf, max_samples,
-max_depth, and n_estimators (CausalForestDML, fit in
-adsim.estimate.fit_one_rank) come from, and how they were chosen.
+This file explains how every setting of the per-rank CausalForestDML
+(adsim.estimate.fit_one_rank) and its two nuisance models is chosen. The
+rule is implemented in adsim/hyperparams.py; each fitted forest stores
+the values it used as `cf.adsim_plan_`, and
+`python -m adsim.estimate --scenario ... --dry-run` prints them for every
+rank without fitting anything.
 
-As of the N-adaptive rewrite in adsim/hyperparams.py, only TWO
-causal-forest parameters are cross-validated per pair (min_samples_leaf,
-min_var_fraction_leaf, via cf.tune()); everything else is derived from
-that pair's own (n_base, n_focal) by a formula, not discovered by
-comparing candidates. The reasoning below explains why: the deciding
-statistical constraint is known in advance from the click rate and each
-pair's sample composition, so cross-validation doesn't have anything to
-"discover" that the formula doesn't already determine.
+THE RULE IN ONE PARAGRAPH
+--------------------------
+For each (base ad, rank r) pair: (1) subsample the larger arm so that
+neither arm has more than 3x the rows of the other; (2) give each tree
+max_samples = min(200,000, N // 2) rows, where N is the pair's size after
+step 1; (3) set min_samples_leaf to the leaf size at which a leaf is
+expected to hold 5 clicks from EACH arm, and min_samples_split to twice
+that. Everything else is fixed: min_var_fraction_leaf = 0.1, 500 trees,
+honest trees, criterion "het", no depth cap, no cf.tune().
 
-THE CORE CONSTRAINT: CLICKS IN THE MINORITY ARM PER LEAF
-----------------------------------------------------------
-is_clicked averages about 0.1% across the data. A tree leaf of size N
-has an expected click count of roughly click_rate * N, and (treating
-clicks as a rare Bernoulli event) the leaf's own click-rate estimate has
-relative standard error of about 1 / sqrt(click_rate * N):
+    arm cap          n_kept(arm) = min(n(arm), 3 * n(smaller arm))
+    rows per tree    max_samples = min(200_000, N // 2)
+    leaf floor       min_samples_leaf  = ceil(5 * N / c_min)
+                     min_samples_split = 2 * min_samples_leaf
+    where c_min = expected clicks of the arm with fewer clicks
+                = min over arms of n_kept(arm) * observed click rate(arm)
 
-    leaf size    expected clicks    relative SE of leaf's rate
-    ---------    ---------------    --------------------------
-        2,000            2                    ~71%
-        5,000            5                    ~45%
-       10,000           10                    ~32%
-       20,000           20                    ~22%
-       50,000           50                    ~14%
-      100,000          100                    ~10%
+There are no thresholds or branches, so every setting moves smoothly
+with the number of observations. (The only special case is an arm with
+zero clicks, where the leaf floor is set to N, the limit of the formula.)
 
-"A few clicks" (5-20) still means 20-45% relative noise per leaf --
-enough to detect large heterogeneity, not fine distinctions. ~10%
-precision needs leaves near 100K, which is at or beyond the *entire*
-combined sample size for several of the rarer advertiser ranks (every
-per-rank fit combines the base ad, ~100K rows, with that rank's own
-rows, which range from ~150 to ~2.6M). That's a real ceiling set by the
-data, not something any hyperparameter choice can lift.
+THE CONSTRAINT THAT DRIVES EVERYTHING: CLICKS IN THE WEAKER ARM
+------------------------------------------------------------------
+is_clicked averages about 0.1%. A CATE is a difference in click rates
+between the two arms, so its precision in a leaf is limited by the arm
+with FEWER clicks in that leaf, not by the leaf's row count. Every pair
+contains the base ad, which has about 100,000 rows in the monopoly data
+and therefore only about 90 clicks; for most pairs the base ad is the
+weaker arm.
 
-The constraint that actually binds isn't leaf size in rows -- it's
-clicks in the MINORITY arm per leaf. For a pair, the expected minority-
-arm click count in a leaf of size L is roughly
-`L * click_rate * min(n_base, n_focal) / N`. Because the base ad has a
-fixed ~100K rows while the focal rank's rows range up to ~2.6M, uniform
-subsampling of a large pair spends most of each tree's budget on the
-already-plentiful focal arm and leaves very few base-arm clicks per
-tree -- that, not tree depth, is what limited the old fixed-number rule.
+For one arm, a leaf holding k expected clicks estimates that arm's click
+rate with a relative standard error of about 1/sqrt(k):
 
-CAPPING THE FOCAL ARM AT ~3x THE BASE ARM
---------------------------------------------
-Past a 3:1 ratio, the majority arm's contribution to Var(tau_hat) (the
-1/n_majority term) is already negligible, but it still consumes most of
-a tree's per-tree sample budget. adsim.hyperparams.cf_hyperparams
-subsamples the focal rank's rows down to
-`min(n_focal, focal_cap_ratio * n_base)` (default ratio 3.0) before
-fitting. This raises the minority arm's share of each tree's budget at
-~identical tree cost, and it bounds every pair's total N at a
-manageable size regardless of how popular the ad is -- solving most of
-the old runtime blowup on the largest ranks as a side effect.
+    expected clicks per arm    relative SE of that arm's rate
+    -----------------------    ------------------------------
+              1                          100%
+              3                           58%
+              5                           45%
+             10                           32%
+             20                           22%
 
-max_samples = min(max_samples_cap, N // 2)  (N = capped pair total)
------------------------------------------------------------------------
-The `// 2` is not optional: econml raises `ValueError` if an integer
-`max_samples` exceeds `n_samples // 2` under `inference="blb"` (used by
-cf.fit(...) below). `max_samples_cap` defaults to 100,000
-(--max-samples-cap). Because this is now computed from each pair's own
-(capped) N instead of being one fixed number, small ranks and large
-ranks both get an appropriately-sized per-tree budget instead of the
-smallest ranks being squeezed hardest (which is what a single fixed
-absolute value did).
+The floor is set at 5 clicks per arm. With 1-3 clicks, each arm's rate
+in a leaf is uncertain by 60-100% of its value, so the split that looks
+best is essentially chosen at random. At 5 the uncertainty is about 45%,
+enough to pick up large differences between user groups (the pairwise
+CATEs vary by tens of percent of the base CTR). Averaging over 500 honest trees, each drawn from a different
+subsample, reduces the noise of the final CATE well below that of any
+single leaf. The floor exists so that the tree STRUCTURE, which decides
+which users are pooled together, is not itself driven by noise.
 
-min_samples_leaf: {H // 4, H // 2}, where H = max_samples // 2
---------------------------------------------------------------------
-This is the parameter that actually floors leaf size, and it's the
-first of the two parameters cross-validated via cf.tune(). It's
-expressed as a function of H (half of max_samples) rather than a fixed
-number because honest=True splits each tree's own subsample into a
-splitting half and an estimation half, and econml enforces the leaf
-floor on BOTH halves and BOTH children of a split -- so `H // k` means
-roughly "allow up to k leaves per honest half," a real, interpretable
-complexity difference (e.g. "4 leaves vs 2 leaves") for cf.tune()'s
-R-score to compare, rather than three candidates that all produce
-structurally identical trees.
-
-min_var_fraction_leaf: {0.01, 0.1}
---------------------------------------
-The second (and only other) cross-validated causal-forest parameter.
-Forces Var(T | leaf) >= c * Var(T), guarding against leaves with
-near-degenerate treatment variation producing exploding CATE estimates
-(this directly answers a referee concern about out-of-range
-predictions). Previously unset (econml default: None / disabled).
-
-min_samples_split = 2 * min(leaf grid)
--------------------------------------------
-Deliberately non-binding: a node can't be split unless BOTH children can
-meet the leaf floor, so min_samples_split must be at least 2x the
-smallest leaf candidate for a split to even be mechanically possible.
-Not cross-validated -- letting it vary independently of the leaf floor
-only makes the grid harder to interpret without adding information.
-
-max_depth: 3 (fixed, not cross-validated)
-------------------------------------------------
-With min_samples_split/min_samples_leaf this large relative to
-max_samples, the leaf/split floor is the practical stopping rule long
-before depth becomes relevant -- trees are expected to manage at most a
-couple of splits before hitting the floor regardless of whether
-max_depth is 3, 10, or 30. A larger max_depth than needed just spends
-tune() time producing structurally identical trees.
-
-n_estimators: 500 (production default; --n-estimators for quick tests)
-------------------------------------------------------------------------
-More trees reduce the variance of the forest's aggregated CATE estimate
-and matter directly for BLB-based inference (cf.fit(...,
-inference="blb", ...)) approximating its asymptotic distribution well.
-500 must remain divisible by econml's subforest_size (default 4) for
-BLB subsampling; 500 / 4 = 125 exactly.
-
-honest=True, min_balancedness_tol=0.45, criterion="het"
+WHAT THE LEAF FLOOR IMPLIES: LEAVES PER TREE = c_min / 20
 ------------------------------------------------------------
-honest=True and min_balancedness_tol=0.45 are econml's own defaults for
-this econml version -- fit_one_rank now passes them explicitly so the
-choice is documented rather than implicit. criterion="het" (the
-heterogeneity-maximizing split criterion) is unchanged from before.
+econml enforces min_samples_leaf on BOTH halves of an honest tree (the
+splitting half and the estimation half; see econml/tree/_splitter.pyx),
+and each half has max_samples / 2 rows. Below the per-tree cap
+(max_samples = N / 2), a tree can therefore hold at most
+
+    (N / 4) / (5 N / c_min) = c_min / 20   leaves per honest half.
+
+So a pair gets heterogeneous (split) trees only if its weaker arm has at
+least 40 expected clicks, whatever its size; otherwise every tree is a
+single leaf and the forest returns a DML estimate of the average effect.
+This is the intended protection against pure noise: an advertiser with
+too few clicks to say anything about heterogeneity gets a constant effect,
+not a random one. Worked examples (base-ad CTR 0.09%, focal CTR 0.10%):
+
+    pair                               kept rows (base/focal)  c_min  max_samples  leaf    leaves/half
+    ---------------------------------  ----------------------  -----  -----------  ------  -----------
+    Monopoly, largest advertiser       100,000 / 300,000        90    200,000      22,223  4.5
+    Monopoly, balanced pair            100,000 / 100,000        90    100,000      11,112  4.5
+    Monopoly, 30K-row advertiser        90,000 /  30,000        30     60,000      20,000  1.5 (average effect)
+    Monopoly, 150-row advertiser           450 /     150         0.2      300         600  0.3 (average effect)
+    Split platform, large advertiser    50,000 / 150,000        45    100,000      22,223  2.25
+    20% subsample, large advertiser     20,000 /  60,000        18     40,000      22,223  0.9 (average effect)
+
+Consequence for the paper: the rule is the same absolute rule in every
+scenario, so a smaller platform (split, Root-N, subsample) learns fewer
+or no splits because it has fewer clicks, not because it was configured
+differently. That is a genuine scale effect of having less data, and it
+should be reported. Before the full run, count the ranks with
+`max_leaves_per_tree < 2` in each scenario from --dry-run, and report
+those counts (the forests themselves carry the same number in
+`cf.adsim_plan_`). Lower --min-clicks-per-arm as a robustness check. At 3,
+the threshold falls to 24 clicks in the weaker arm.
+
+ARM BALANCE: NEITHER ARM MORE THAN 3x THE OTHER (--arm-ratio-cap)
+-----------------------------------------------------------------------
+Focal ranks range from about 150 to 2.6M rows, against about 100,000
+base-ad rows. Without a cap, a tree drawn from the largest pairs is ~96%
+focal rows. Its base-ad share of a 20,000-row leaf holds under one
+expected click, so its splits are driven by the focal arm's noise. The
+nuisance grid search also runs on 2.7M rows. The cap:
+
+  - keeps each arm at >= 25% of every pair, so the per-tree budget
+    always contains both arms in useful proportions;
+  - bounds every pair at 4x its smaller arm (at most ~400,000 rows in the
+    monopoly), which is what makes the runtime predictable;
+  - costs a bounded amount of precision. Var(ATE) is about
+    p/n_small + p/n_large; keeping 3x the smaller arm makes the second
+    term at most 1/3 of the first. That is at most 33% more variance
+    (about 15% wider intervals) than using every row of the larger arm,
+    and only for pairs where the cap binds.
+
+The cap is applied symmetrically, so for tiny advertisers the base ad is
+subsampled too. Those pairs get an average effect anyway (see above).
+The subsampling is random within each arm, which leaves the conditional
+outcome distribution within each arm, and hence tau(x), unchanged. It is
+seeded by --random-state, and base_ad_helpers rebuilds exactly the same
+rank-1 pair.
+
+ROWS PER TREE: max_samples = min(200,000, N // 2) (--max-samples-cap)
+---------------------------------------------------------------------------
+N // 2 is the largest integer econml accepts under inference="blb"
+("max_samples must be in [1, n_samples // 2]"), so this can never raise.
+(The previous "50000 if N > 50000 else N // 2" guard raised for every pair
+of 50,000-100,000 rows: in cf.tune(), which fits on 70% of the rows, for
+pairs under ~71,500, and in fit() above that.) N // 2 is also grf's
+default subsample fraction.
+
+The 200,000 cap bounds forest-building time. Measured on synthetic data
+the size of the largest capped pair (400,000 rows, 8 vCPU, 100 trees):
+the nuisance grid search took 179 s and the forest fit (with DML cross-
+fitting) 60 s. The forest is not the bottleneck, and the full fit is a few
+minutes per large pair. At a 100,000 cap the largest pairs could hold only
+~1.9 leaves per honest half, i.e. no splits for the most-served
+advertisers. At 200,000 they reach 4.5, the same as balanced pairs.
+
+min_var_fraction_leaf = 0.1 (--min-var-fraction-leaf)
+------------------------------------------------------
+The arm cap fixes the arms' overall shares, but a leaf can still end up
+with almost no rows of one arm (e.g. where the propensity varies with
+X). There the local contrast is not identified and the CATE can explode.
+This is referee R1.4's concern about out-of-range predictions. econml's
+min_var_fraction_leaf rejects any split whose child keeps less than 10%
+of the pair's treatment-residual variance.
+
+n_estimators = 500; honest=True; criterion="het"; max_depth=None
+-----------------------------------------------------------------------
+500 trees keep the BLB confidence intervals stable and must be divisible
+by econml's subforest size (4); the CLI rejects other values. Honest
+trees are required for valid inference. With the leaf floor controlling
+complexity, a depth cap would never bind, so none is set.
+
+WHY THERE IS NO cf.tune()
+--------------------------
+tune() compares candidates by R-score using 100-tree forests on a 70/30
+split. The previous grid had a single candidate
+({'min_samples_split': [20000]}), so tune() changed nothing and roughly
+doubled the cost per rank (it fits a scorer's nuisance models plus a full
+DML fit). At a 0.1% click rate the R-score of small forests is too noisy
+to rank genuinely different candidates reliably, and the settings that
+matter follow from the click constraint above. Note that tune() writes
+every key of its grid back onto the estimator (setattr), so anything put
+in a grid silently overrides the constructor. That is why adsim.estimate_joint's
+cf_param_grid must never contain n_estimators or max_depth.
 
 THE NUISANCE MODELS: m(X) = E[Y|X] AND e(X) = P(T=1|X)
 =========================================================
-Both are grid-searched (adsim.hyperparams.m_model_best_estimator /
-e_model_best_estimator) over a single parameter, min_samples_leaf, with
-everything else fixed:
+Both are random forests (100 trees, max_features="sqrt"), grid-searched
+only over min_samples_leaf with 3-fold cross-validation stratified on
+the target. The winning configuration is passed to CausalForestDML
+unfitted, with n_jobs set, so econml's own cross-fitting also runs in
+parallel. (Previously the final nuisance models were built without
+n_jobs and ran on one core.)
 
-  - max_features="sqrt" is fixed (not searched) for both. sklearn's
-    RandomForestRegressor/RandomForestClassifier default to
-    max_features=1.0 / "sqrt" varies by version, but leaving it
-    unspecified previously meant searching (effectively) all 37
-    covariates at every split on up to ~2.7M rows -- the single biggest
-    avoidable cost in nuisance fitting. sqrt(37) ~= 6 cuts split-search
-    work roughly 6x; for nuisance prediction quality this costs nothing
-    measurable, since m(X)/e(X) only need to be "good enough" for
-    orthogonalization, not the final object of interest.
-  - n_estimators=100, cv=3 for both (down from the previous shared
-    9-combo x cv=5 grid over max_depth/min_samples_split).
-  - m(X) is scored by neg_mean_squared_error; leaf-size candidates are
-    min(10/click_rate, N/40) and min(100/click_rate, N/10) -- targeting
-    ~10 and ~100 expected clicks per leaf, capped as an absolute
-    fraction of N so the grid stays sane even for a near-zero click
-    rate. m(X)'s leaves end up large, and that's correct: a pair sample
-    holds only a few hundred clicks total, so m(X) genuinely cannot
-    resolve more than that -- and under orthogonality, m(X)'s error
-    enters tau_hat only multiplied by e(X)'s error, so over-smoothing
-    m(X) is the cheap direction to err in.
-  - e(X) is scored by neg_log_loss (previously F1) -- DML needs a
-    calibrated probability, not a thresholded decision, and with arm
-    shares as lopsided as 150-vs-100,000 rows, F1 will happily select a
-    model that predicts the majority class everywhere.
-    adsim.propensity_model.PropensityModel.score() was fixed the same
-    way, since econml also calls that method internally during
-    cf.tune() regardless of which scorer GridSearchCV was given
-    explicitly. e(X)'s leaf-size candidates are
-    min(10/rare_rate, N/100) and min(50/rare_rate, N/20), where
-    rare_rate = min(n_base, n_focal_used)/N -- e(X) needs the RARE arm's
-    representation bounded away from 0/1 (the binding count here is
-    treated units, not clicks), so its target uses the rare-arm rate,
-    not the click rate.
+  - m(X): scored by mean squared error (the Brier score for a binary Y).
+    Leaf candidates target ~10 and ~100 expected clicks per leaf,
+    min(10 / click_rate, N/40) and min(100 / click_rate, N/10). Over-
+    smoothing m is the cheap direction to err in: under orthogonality its
+    error enters tau_hat only multiplied by e's error.
+  - e(X): adsim.propensity_model.PropensityModel, which uses only the
+    page-context features (the identification assumption). It is scored
+    by log-loss, not F1, because DML needs calibrated probabilities. On
+    a synthetic pair with a 5% treated arm, F1 was 0.0 for all four
+    candidates of the old grid, so the first grid entry won by default.
+    Log-loss separated them (-0.194 vs -0.265 for an unrestricted deep
+    forest). Leaf candidates target ~10 and ~50 expected rows of the
+    smaller arm, min(10 / rare_rate, N/100) and min(50 / rare_rate, N/20).
 
-WHY THESE CAUSAL-FOREST PARAMETERS AREN'T ALL CROSS-VALIDATED
---------------------------------------------------------------------
-The nuisance-model grids (m/e) make sense to cross-validate: which
-min_samples_leaf best predicts Y or T is an ordinary prediction
-question CV can answer. But for the causal forest's own max_samples /
-min_samples_split / max_depth, the deciding constraint (enough clicks in
-the minority arm per leaf, given this pair's own composition) is known
-in advance from click_rate and (n_base, n_focal) -- CV comparison across
-candidates has no way to "discover" a statistical requirement like that
-better than just computing it, and letting them vary independently
-re-introduces exactly the kind of hard-to-interpret grid (three
-structurally identical trees) the old max_depth grid produced.
+GROUPING BY USER (--group-col, default global_token_new)
+-----------------------------------------------------------
+Users contribute many impressions. If one user's rows sit on both sides
+of a cross-fitting split, the nuisance predictions for that user are
+partly in-sample. When the estimation data has the user-id column, both
+the nuisance grid search (StratifiedGroupKFold) and econml's cross-
+fitting (groups=...) keep each user's rows together. If an arm has fewer
+than 20 distinct users, that rank falls back to row-level folds.
+StratifiedGroupKFold can otherwise leave a training fold with no rows of
+the arm, which econml rejects. Such arms are far below the click floor
+anyway.
 
-A REAL BUG THIS RULE ALSO FIXES: cf.tune() overriding the final
-model's hyperparameters
--------------------------------------------------------------------
-econml's CausalForestDML.tune() writes EVERY key in the `params` dict
-passed to it back onto the estimator object via `setattr(self, key,
-value)` -- not a copy. Anything not in that dict (n_estimators,
-max_depth, min_samples_split under the current rule) is left exactly as
-the constructor set it; only min_samples_leaf and min_var_fraction_leaf
-are meant to be touched by tune(), and they are the only two in the
-dict passed to cf.tune() in fit_one_rank.
+Limitation: econml does not pass groups to the final forest, so its
+per-tree subsampling and the BLB confidence intervals still treat rows
+as independent. Those intervals are likely too narrow. Report user-
+clustered bootstrap intervals for any headline statistic.
+
+CACHED TRAINING DATA (--cache-values, off by default)
+---------------------------------------------------------
+cache_values=True stores the training matrix inside each pickle (about
+120 MB for a 400,000-row pair; 154 MB measured). The simulation loads all
+~94 forests into every worker process, so caching could cost tens of GB
+per process. Nothing in the simulation or analysis notebooks needs it.
+Pass --cache-values only for forests you want to call cf.summary() or
+refit_final() on.
 
 CLI OVERRIDES
 --------------
-adsim.estimate accepts --n-estimators, --max-depth, --focal-cap-ratio,
---max-samples-cap (defaults: 500, 3, 3.0, 100_000). The old
---min-samples-split / --min-samples-leaf / --max-samples flags are gone
--- those are now derived per pair, not settable as flat absolute
-overrides.
+--arm-ratio-cap (3), --max-samples-cap (200000), --min-clicks-per-arm (5),
+--min-var-fraction-leaf (0.1), --n-estimators (500), --group-col
+(global_token_new), --cache-values, --random-state (42).
 
-DEFERRED / NOT IMPLEMENTED (discussed, intentionally left for later)
-========================================================================
-The design discussion behind this rule also worked out three further
-pieces of machinery that are NOT implemented here:
-
-  1. A click-based feasibility ladder per pair: minority-arm clicks == 0
-     or minority rows < 30 -> degenerate (single-leaf forest, flagged
-     homogeneous effect, still returned through the same interface so no
-     rank is ever silently dropped from ranks_list); minority clicks <
-     25 -> force a single-leaf ATE-only forest; otherwise -> normal
-     CATE fit. Right now every pair goes through the same
-     cf_hyperparams path regardless of how few realized clicks it ends
-     up with -- the zero-rate guards in m_model_leaf_grid /
-     e_model_leaf_grid only prevent a crash, they don't implement this
-     ladder's statistical treatment of a near-empty pair.
-  2. A `freeze=` robustness mode: re-running the split/duopoly scenarios
-     with the monopoly scenario's own NUMERIC hyperparameters (clipped
-     only where mechanically illegal) instead of each scenario computing
-     its own from its own smaller N, to check whether a measured merger
-     gain survives once tree geometry no longer differs by construction
-     between scenarios.
-  3. Tuning by size bucket (one representative large/medium/small pair,
-     apply the winning nuisance-model choice within each bucket) instead
-     of per pair -- the current code re-tunes m(X)/e(X) independently
-     for every single rank, same as before this rewrite.
+HISTORY: RULES THIS REPLACES
+-----------------------------
+  - 2024 (produced the submitted paper): max_samples = 0.01 of each pair,
+    grid-searched min_samples_split {1000, 2000, 5000} and max_depth
+    {10, 20, 30}, n_estimators silently set to 300 by tune(), leaf floor
+    left at econml's default of 5 rows, propensity model chosen by F1.
+    Small ranks got ~1,000 rows per tree and leaves with ~0 clicks.
+  - 7 Sep 2026: fixed min_samples_split 20,000, min_samples_leaf 10,000,
+    max_samples 50,000, max_depth 10 for every rank and scenario. It had
+    no arm cap, so leaves in the largest pairs held <1 base-ad click. The
+    honest halving meant at most one split per tree. The 27 Sep guard on
+    max_samples raised for pairs of 50,000-100,000 rows.
+  - 12 Sep 2026: leaf floor as a fraction of the per-tree sample
+    (H/4, H/2), not tied to clicks, so small pairs could split on leaves
+    with almost no clicks. It also used a cv-tuned min_var_fraction_leaf.

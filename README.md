@@ -15,7 +15,7 @@ in a set of Jupyter notebooks.
 - ✅ Importing `adsim.config` does no I/O — forests load on demand
 - ✅ One CLI per pipeline stage (`python -m adsim.<thing>`)
 - ✅ HPC-friendly estimation (auto-resume, per-rank logs, fault-isolated)
-- ✅ Test suite: 58 tests passing
+- ✅ Test suite: 115 tests passing
 - ⚠️  Input `.dta` files are not in git — must be supplied locally
 - ⚠️  Old `CF - Rank *.pkl` artifacts (sklearn 1.2 / econml 0.14) likely
   won't load in this env — re-fit with `python -m adsim.estimate`, or
@@ -72,7 +72,8 @@ results/Full Model/Split {N}[ - Root N]/CF - Rank {r}.pkl
 results/Full Model/{m1,e1}.pkl              (base-ad y0 helpers)
         │
         ▼   python -m adsim.simulate.{monopoly,duopoly,duopoly_root_n}
-            (loads forests via adsim.config.load_*_forests())
+            (loads forests via adsim.config.load_*_forests(); per-rank
+             pickles first, else a Joint CF.pkl from adsim.estimate_joint)
 results/Full Model/Simulation Results/Simluation Results - * - chunk N.dta
         │
         ▼   notebooks
@@ -107,7 +108,7 @@ notebooks/sample_size/sample_size_analysis.ipynb
 | `notebooks/analysis/` | Paper-ready analysis notebooks (`results_analysis`, `advertiser_welfare_analysis`, `ctr_vs_repeat`, `subject_correlation_matrix`, `merge_simulation_results`). |
 | `notebooks/sample_size/` | Sample-size sensitivity aggregation (`sample_size_analysis.ipynb`). |
 | `notebooks/exploration/` | Pairwise-estimation studies (`pairwise_estimation_ad_1_vs_2`, `pairwise_estimation_ad_1_vs_3_full_week`). See [`notebooks/README.md`](notebooks/README.md) for details. |
-| `tests/` | Pytest suite (58 tests). |
+| `tests/` | Pytest suite (115 tests). |
 | `data/`, `results/` | **Not in git.** Populate locally before running anything. |
 
 ---
@@ -132,7 +133,7 @@ Each new shell needs `source .venv/bin/activate`.
 
 ```bash
 python -c "from econml.dml import CausalForestDML; import adsim; print(adsim.__version__)"
-python -m pytest tests/                # 58 passing
+python -m pytest tests/                # 115 passing
 python -m adsim.estimate --help        # CLI sanity
 ```
 
@@ -226,7 +227,21 @@ The CLI is **HPC-friendly**:
   (Python expression on `rank`), or `--limit N` (cap to first N ranks).
 - **Structured logs**: each rank prints scenario, walltime, and output
   path.
-- **`--dry-run`** prints what would run without fitting anything.
+- **`--dry-run`** prints each rank's hyperparameter plan without fitting
+  anything.
+
+**Hyperparameters are derived per rank, not tuned.** For each (base ad,
+rank) pair the larger arm is subsampled to at most 3x the smaller one,
+each tree gets `min(200,000, N // 2)` rows, and leaves must hold about 5
+expected clicks from each arm. A rank whose weaker arm has fewer than
+~40 expected clicks therefore gets a constant (average) effect. The rationale
+is in [`docs/hyperparameter_choices.txt`](docs/hyperparameter_choices.txt).
+Override the rule with `--arm-ratio-cap`, `--max-samples-cap`,
+`--min-clicks-per-arm` and `--min-var-fraction-leaf`. Cross-fitting is
+grouped by user when the data has `global_token_new` (`--group-col`).
+Each saved forest records its settings in `cf.adsim_plan_`, and
+`--cache-values` keeps econml's cached training data (needed for
+`cf.summary()`, large).
 
 Run `python -m adsim.estimate --help` for the full list. Example HPC
 submission (Slurm):
@@ -304,7 +319,7 @@ This is the contract every simulation script relies on.
 ## Tests
 
 ```bash
-python -m pytest tests/                 # 58 passing
+python -m pytest tests/                 # 115 passing
 python -m pytest tests/ -v              # verbose
 python -m pytest tests/test_estimate_cli.py    # one file
 ```
@@ -313,8 +328,15 @@ Coverage:
 
 - `tests/test_simulation_steps.py` — pure-function helpers (`prepare_data`,
   `extract_ranks`, `find_optimal_ads`).
-- `tests/test_estimate_cli.py` — CLI argument parsing + scenario dispatch
-  for `adsim.estimate`.
+- `tests/test_estimate_cli.py` — CLI argument parsing, scenario dispatch
+  and arm-balanced pair construction for `adsim.estimate`.
+- `tests/test_hyperparams.py` — the hyperparameter rule (`max_samples`
+  never above `N // 2`, the per-arm click floor, continuity in N).
+- `tests/test_estimate_fit.py` — `fit_one_rank` end to end on small
+  synthetic pairs (runs econml).
+- `tests/test_config_loaders.py` — per-rank / joint forest loading.
+- `tests/test_base_ad_ctr.py` — the base-ad click rate
+  y0 = m1 − τ1·e1 and `base_ad_helpers`.
 - `tests/test_package_imports.py` — package-level invariants (importing
   `adsim.config` is side-effect-free; env-var path overrides work; every
   submodule imports cleanly).
@@ -412,7 +434,7 @@ intentional.
   reports OK / DEGRADED / INCOMPATIBLE for any pre-existing
   `CF - Rank *.pkl` so you don't have to guess whether a pickle from
   sklearn 1.2 / econml 0.14 will work here.
-- **Tests pass.** `python -m pytest tests/` → 58 passing tests covering
+- **Tests pass.** `python -m pytest tests/` → 115 passing tests covering
   pure-function helpers, CLI argument parsing, package import
   invariants, and CLI smoke tests.
 
@@ -420,10 +442,10 @@ intentional.
 
 ## Known cleanup tasks
 
-- [ ] The `predict_proba(...).reshape(-1, 1)` in
-  `adsim.simulation_steps.calc_base_ad_ctr_vector` is suspicious
-  (`predict_proba` returns shape `(n, 2)`, not `(n,)`); audit before
-  re-running the duopoly simulation.
+- [x] ~~`predict_proba(...).reshape(-1, 1)` in `calc_base_ad_ctr_vector`~~:
+  fixed together with `base_ad_helpers`, which fit `e1` on a treatment
+  coded 1 for every row. Any `e1.pkl` from before this fix is rejected
+  with an error; re-run `python -m adsim.simulate.base_ad_helpers`.
 - [ ] Hardcoded chunk sizes (`1620000 / n_processes`, `820000`,
   `300000`) in the simulation modules. Make them either CLI args or
   auto-derived from `data.global_token_new.nunique()`.
