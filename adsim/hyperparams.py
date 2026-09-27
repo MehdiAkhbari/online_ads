@@ -1,103 +1,117 @@
-"""N-adaptive hyperparameter rule for `adsim.estimate`'s per-rank causal
-forests.
+"""Hyperparameter rule for `adsim.estimate`'s per-rank causal forests.
 
-Supersedes the fixed absolute values (min_samples_split=20000,
-min_samples_leaf=10000, max_samples=50000 for *every* rank) previously
-described in docs/hyperparameter_choices.txt. See that file for the full
-derivation; this module is the implementation.
+One (base ad, focal rank) pair at a time, three quantities decide
+everything:
 
-Deliberately isolated from `adsim.simulation_steps` / `adsim.estimate_joint`:
-those still use the old static `param_grid` / `cf_param_grid` / grid-search
-helpers unchanged. Only `adsim.estimate` (the per-rank/per-pair pipeline)
-uses this module.
+1. Arm balance. Neither arm may have more than `arm_ratio_cap` times the
+   rows of the other; the larger arm is randomly subsampled down to that.
+2. Rows per tree. `max_samples = min(max_samples_cap, N // 2)`, where N is
+   the pair's row count after step 1. `N // 2` is the most econml accepts
+   under `inference="blb"`, so this can never raise; the cap bounds runtime.
+3. Leaf floor. `min_samples_leaf` is the leaf size at which a leaf is
+   expected to hold `min_clicks_per_arm` clicks from EACH arm:
+   `ceil(min_clicks_per_arm * N / c_min)`, where c_min is the expected click
+   count of the arm with fewer clicks. econml enforces the floor on both
+   honest halves of every tree, so a pair whose half-sample cannot hold two
+   such leaves gets unsplit trees, i.e. an average effect only.
+
+No thresholds or branches: max_samples is piecewise linear in N, and the
+leaf floor depends only on the arms' shares and click rates, so the number
+of leaves a tree can grow (`max_samples / 2 / min_samples_leaf`) rises
+smoothly with N until the per-tree cap binds. See
+docs/hyperparameter_choices.txt for the reasoning behind each default.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import asdict, dataclass
 
-# sklearn / adsim.propensity_model are imported lazily inside
-# m_model_best_estimator / e_model_best_estimator below, not at module
-# level: cf_hyperparams / m_model_leaf_grid / e_model_leaf_grid are pure
-# arithmetic and should be importable (and unit-testable) without those
-# heavier dependencies installed.
+# sklearn / adsim.propensity_model are imported lazily inside the
+# *_best_estimator helpers so the pure-arithmetic rule stays importable
+# (and unit-testable) without them.
+
+ARM_RATIO_CAP: float = 3.0
+MAX_SAMPLES_CAP: int = 200_000
+MIN_CLICKS_PER_ARM: float = 5.0
+MIN_VAR_FRACTION_LEAF: float = 0.1
+N_ESTIMATORS: int = 500
+
+
+def arm_sizes_after_cap(n_base: int, n_focal: int, arm_ratio_cap: float = ARM_RATIO_CAP) -> tuple[int, int]:
+    """Rows kept in each arm so that neither exceeds `arm_ratio_cap` x the other."""
+    if arm_ratio_cap < 1:
+        raise ValueError(f"arm_ratio_cap must be >= 1, got {arm_ratio_cap}")
+    cap = math.floor(arm_ratio_cap * min(n_base, n_focal))
+    return min(n_base, cap), min(n_focal, cap)
 
 
 @dataclass(frozen=True)
-class CFHyperparams:
-    """Derived causal-forest hyperparameters for one (base ad, focal rank)
-    pair. `min_samples_leaf_grid` and `min_var_fraction_leaf_grid` are
-    meant to be cross-validated via `cf.tune()`; every other field is a
-    fixed value or formula, not searched.
-    """
+class CFPlan:
+    """Causal-forest settings for one pair, plus the inputs that produced them."""
 
-    n_focal_used: int
+    n_base: int
+    n_focal: int
     n_total: int
+    expected_clicks_base: float
+    expected_clicks_focal: float
     max_samples: int
+    min_samples_leaf: int
     min_samples_split: int
-    min_samples_leaf_grid: list[int]
-    min_var_fraction_leaf_grid: list[float]
-    max_depth: int
+    min_var_fraction_leaf: float
     n_estimators: int
-    min_balancedness_tol: float
+    max_leaves_per_tree: float
+
+    def as_dict(self) -> dict:
+        return asdict(self)
 
 
 def cf_hyperparams(
     n_base: int,
     n_focal: int,
+    click_rate_base: float,
+    click_rate_focal: float,
     *,
-    focal_cap_ratio: float = 3.0,
-    max_samples_cap: int = 100_000,
-    n_estimators: int = 500,
-    max_depth: int = 3,
-) -> CFHyperparams:
-    """Derive one pair's causal-forest hyperparameters from its sample
-    composition.
+    max_samples_cap: int = MAX_SAMPLES_CAP,
+    min_clicks_per_arm: float = MIN_CLICKS_PER_ARM,
+    min_var_fraction_leaf: float = MIN_VAR_FRACTION_LEAF,
+    n_estimators: int = N_ESTIMATORS,
+) -> CFPlan:
+    """Derive one pair's causal-forest settings.
 
-    - Caps the focal (usually majority) arm at `focal_cap_ratio` x the
-      base arm: past ~3:1 the majority arm's contribution to
-      Var(tau_hat) is already negligible, but it still consumes most of
-      each tree's per-tree sample budget. Capping trades away that
-      near-zero marginal benefit for far more base-arm representation
-      per tree, and bounds every pair's N at a manageable size.
-    - `max_samples = min(max_samples_cap, n_total // 2)`. The `// 2` is
-      not optional: econml raises `ValueError` if an integer
-      `max_samples` exceeds `n_samples // 2` under `inference="blb"`.
-    - `min_samples_leaf` gets two candidates, `H // 4` and `H // 2` where
-      `H = max_samples // 2`: honest=True splits each tree's subsample
-      into a splitting half and an estimation half, and the leaf floor
-      binds on both halves and both children, so `H // k` means "allow
-      up to k leaves per honest half" -- a real, interpretable
-      complexity difference for `cf.tune()`'s R-score to compare.
-    - `min_samples_split = 2 * min(leaf grid)`: the loosest floor that
-      still keeps min_samples_split non-binding (a node can't split
-      unless both children can meet the leaf floor).
+    `n_base` / `n_focal` are the arm sizes AFTER `arm_sizes_after_cap`;
+    the click rates are each arm's observed click rate.
     """
-    n_focal_used = max(1, min(n_focal, round(focal_cap_ratio * n_base)))
-    n_total = n_base + n_focal_used
-    max_samples = max(2, min(max_samples_cap, n_total // 2))
-    h = max(1, max_samples // 2)
-    leaf_grid = sorted({max(1, h // 4), max(1, h // 2)})
-    min_samples_split = 2 * leaf_grid[0]
-    return CFHyperparams(
-        n_focal_used=n_focal_used,
+    n_total = n_base + n_focal
+    if n_total < 2:
+        raise ValueError(f"need at least 2 rows to fit a forest, got {n_total}")
+
+    max_samples = min(max_samples_cap, n_total // 2)
+
+    clicks_base = n_base * click_rate_base
+    clicks_focal = n_focal * click_rate_focal
+    c_min = min(clicks_base, clicks_focal)
+    if c_min > 0:
+        min_samples_leaf = min(n_total, math.ceil(min_clicks_per_arm * n_total / c_min))
+    else:
+        min_samples_leaf = n_total
+
+    return CFPlan(
+        n_base=n_base,
+        n_focal=n_focal,
         n_total=n_total,
+        expected_clicks_base=clicks_base,
+        expected_clicks_focal=clicks_focal,
         max_samples=max_samples,
-        min_samples_split=min_samples_split,
-        min_samples_leaf_grid=leaf_grid,
-        min_var_fraction_leaf_grid=[0.01, 0.1],
-        max_depth=max_depth,
+        min_samples_leaf=min_samples_leaf,
+        min_samples_split=2 * min_samples_leaf,
+        min_var_fraction_leaf=min_var_fraction_leaf,
         n_estimators=n_estimators,
-        min_balancedness_tol=0.45,
+        max_leaves_per_tree=(max_samples / 2) / min_samples_leaf,
     )
 
 
 def _leaf_grid(n_total: int, rate: float, targets: tuple[float, float], caps: tuple[float, float]) -> list[int]:
-    # Guards a same-pair zero-rate edge case (e.g. a pair with no clicks
-    # at all) against ZeroDivisionError. This is a minimal safety net,
-    # not the click-based degenerate/ATE-only handling described in the
-    # design discussion -- that ladder is deferred; see
-    # docs/hyperparameter_choices.txt.
     rate = max(rate, 1.0 / n_total)
     candidates = [
         min(target / rate, n_total / cap)
@@ -115,56 +129,62 @@ def m_model_leaf_grid(n_total: int, click_rate: float) -> list[int]:
 
 def e_model_leaf_grid(n_total: int, rare_arm_rate: float) -> list[int]:
     """Leaf-size candidates for the propensity model e(X) = P(T=1|X):
-    target ~10 and ~50 expected rare-arm units per leaf, capped at N/100
-    and N/20. Uses the rare arm's rate (not the click rate) -- what e(X)
-    needs bounded away from 0/1 is the rare arm's representation, since
-    the binding count here is treated units, not clicks.
+    target ~10 and ~50 expected rare-arm rows per leaf, capped at N/100
+    and N/20.
     """
     return _leaf_grid(n_total, rare_arm_rate, targets=(10.0, 50.0), caps=(100.0, 20.0))
 
 
-def m_model_best_estimator(X, Y, leaf_grid: list[int], n_jobs: int):
-    """Grid-search the outcome model m(X) over `leaf_grid`.
+def _cv_splitter(groups, random_state: int, n_splits: int = 3):
+    """Stratified folds (by the target being predicted), grouped by user
+    when user ids are available so one user's impressions never straddle
+    a train/validation boundary."""
+    from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 
-    max_features="sqrt" is fixed (not searched): sklearn's
-    RandomForestRegressor defaults to max_features=1.0, i.e. searching
-    all covariates at every split, which is the single biggest avoidable
-    cost in nuisance fitting. n_estimators=100 is fixed for the same
-    reason tune()'s own internal forests use 100 -- this is a nuisance
-    model, not the final causal forest.
-    """
+    if groups is None:
+        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    return StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+
+def m_model_best_estimator(X, Y, leaf_grid: list[int], n_jobs: int, groups=None, random_state: int = 42):
+    """Grid-search the outcome model m(X) over `leaf_grid` (scored by MSE,
+    i.e. the Brier score for a binary Y). Returns the best parameters and
+    an UNFITTED estimator configured with them."""
+    from sklearn.base import clone
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.model_selection import GridSearchCV
 
-    model = RandomForestRegressor(n_estimators=100, max_features="sqrt", n_jobs=n_jobs, verbose=0)
+    model = RandomForestRegressor(n_estimators=100, max_features="sqrt", n_jobs=n_jobs,
+                                  random_state=random_state, verbose=0)
     grid = GridSearchCV(
         estimator=model,
         param_grid={"min_samples_leaf": leaf_grid},
         scoring="neg_mean_squared_error",
-        cv=3,
+        cv=_cv_splitter(groups, random_state),
+        refit=False,
     )
-    grid.fit(X, Y)
-    return grid.best_params_, grid.best_estimator_
+    # Stratify on Y so every fold sees clicks.
+    grid.fit(X, Y, groups=groups)
+    return grid.best_params_, clone(model).set_params(**grid.best_params_)
 
 
-def e_model_best_estimator(X, T, leaf_grid: list[int], n_jobs: int):
-    """Grid-search the propensity model e(X) over `leaf_grid`.
-
-    Scored by neg_log_loss, not F1: DML needs a calibrated probability,
-    not a thresholded decision, and with arm shares as lopsided as
-    150-vs-100,000 rows, F1 will happily select a model that predicts
-    the majority class everywhere.
-    """
+def e_model_best_estimator(X, T, leaf_grid: list[int], n_jobs: int, groups=None, random_state: int = 42):
+    """Grid-search the propensity model e(X) over `leaf_grid`, scored by
+    log-loss: DML needs calibrated probabilities, and a thresholded metric
+    such as F1 scores every candidate ~0 when one arm is rare. Returns the
+    best parameters and an UNFITTED estimator configured with them."""
+    from sklearn.base import clone
     from sklearn.model_selection import GridSearchCV
 
     from adsim.propensity_model import PropensityModel
 
-    model = PropensityModel(n_estimators=100, max_features="sqrt", n_jobs=n_jobs)
+    model = PropensityModel(n_estimators=100, max_features="sqrt", n_jobs=n_jobs, random_state=random_state)
     grid = GridSearchCV(
         estimator=model,
         param_grid={"min_samples_leaf": leaf_grid},
         scoring="neg_log_loss",
-        cv=3,
+        cv=_cv_splitter(groups, random_state),
+        refit=False,
     )
-    grid.fit(X, T)
-    return grid.best_params_, grid.best_estimator_
+    grid.fit(X, T, groups=groups)
+    return grid.best_params_, clone(model).set_params(**grid.best_params_)

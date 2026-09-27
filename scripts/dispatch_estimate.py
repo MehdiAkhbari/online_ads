@@ -29,11 +29,12 @@ Two things make this non-trivial:
      ratio.
 
 The cost model splits each rank's predicted time into two additive
-pieces, calibrated from real timed fits (109K and 483K rows) with the
-current hyperparameters (see docs/hyperparameter_choices.txt):
+pieces, calibrated from real timed fits (109K and 483K rows) under an
+older hyperparameter rule (see the constants' comment below). "rows" is
+the pair's size after adsim.hyperparams.arm_sizes_after_cap:
   - grid search (e/m nuisance models): independent of n_estimators and
     of the causal-forest hyperparameters, scales as rows**GRID_EXPONENT.
-  - tune+fit (the causal forest itself): scales as
+  - fit (the causal forest itself): scales as
     rows**TUNEFIT_EXPONENT, and roughly LINEARLY in n_estimators (each
     tree is independent), since the two calibration points were both
     measured at n_estimators=100.
@@ -63,13 +64,15 @@ import time
 from pathlib import Path
 
 from adsim.estimate import SCENARIOS, load_data_and_ranks, select_ranks
+from adsim.hyperparams import ARM_RATIO_CAP, MAX_SAMPLES_CAP, arm_sizes_after_cap
 from adsim.paths import RESULTS_DIR
 
-# Calibrated on an 8-vCPU dev VM at n_estimators=100 with the hyperparameters
-# in place before the N-adaptive rewrite (see docs/hyperparameter_choices.txt
-# and adsim/hyperparams.py) -- per-pair max_samples/leaf sizes now vary by
-# rank instead of being fixed, so these constants are stale until
-# re-calibrated against a real timed batch under the new rule.
+# Calibrated on an 8-vCPU dev VM at n_estimators=100 under an older rule
+# (fixed 50K rows per tree, a 9-candidate nuisance grid and cf.tune()).
+# The current rule (adsim.hyperparams) has a 2-candidate nuisance grid, no
+# tune() and at most (arm_ratio_cap + 1) x the smaller arm's rows per pair,
+# so these overstate absolute time; rows are what drive the relative
+# load-balancing. Re-calibrate on a timed batch before capacity planning.
 GRID_CONST, GRID_EXPONENT = 7.83811e-05, 1.2329
 TUNEFIT_CONST, TUNEFIT_EXPONENT = 1.12328e-05, 1.2934
 TUNEFIT_CALIBRATION_N_ESTIMATORS = 100
@@ -107,6 +110,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--n-estimators", type=int, default=500,
                     help="Passed through to each estimate.py worker's --n-estimators; "
                          "also used for this script's own runtime projection.")
+    p.add_argument("--arm-ratio-cap", type=float, default=ARM_RATIO_CAP,
+                    help="Passed through to each estimate.py worker; also used to size each rank's pair.")
+    p.add_argument("--max-samples-cap", type=int, default=MAX_SAMPLES_CAP,
+                    help="Passed through to each estimate.py worker.")
     p.add_argument("--only-largest", type=int, default=None,
                     help="Debug/validation aid: only schedule the N largest ranks by row count.")
     p.add_argument("--only-ranks", type=str, default=None,
@@ -129,7 +136,10 @@ def main(argv=None) -> int:
 
     counts = data["advertiser_rank"].value_counts()
     base_count = int(counts.get(0, 0))
-    rank_rows = {r: base_count + int(counts.get(r, 0)) for r in ranks}
+    rank_rows = {
+        r: sum(arm_sizes_after_cap(base_count, int(counts.get(r, 0)), args.arm_ratio_cap))
+        for r in ranks
+    }
     del data  # free the full dataframe; workers each load their own copy
 
     if args.only_ranks is not None:
@@ -167,6 +177,8 @@ def main(argv=None) -> int:
             "--n-jobs", str(args.n_jobs),
             "--random-state", str(args.random_state),
             "--n-estimators", str(args.n_estimators),
+            "--arm-ratio-cap", str(args.arm_ratio_cap),
+            "--max-samples-cap", str(args.max_samples_cap),
         ]
         if args.split is not None:
             cmd += ["--split", str(args.split)]

@@ -1,8 +1,12 @@
 """Fit the base-ad y0 helpers (m1.pkl, e1.pkl).
 
-Loads the rank-1 causal forest, refits its inner Y model on Y and its
-inner T model on T over the data subset where advertiser_rank in
-{base_ad, 1}, and saves them as `results/Full Model/{m1,e1}.pkl`.
+The simulation recovers the base ad's click rate as
+y0(x) = m1(x) - tau_1(x) * e1(x), where tau_1 is the rank-1 causal forest,
+m1(x) = E[Y | X] and e1(x) = P(ad 1 shown | X) on the (base ad, rank 1)
+pair. m1 and e1 must be fit on the same rows; this rebuilds the pair
+exactly as `adsim.estimate` did for the rank-1 forest (same arm-balance cap
+and seed, read from the forest's `adsim_plan_`) and fits fresh copies of
+that forest's nuisance models on it.
 
 Replaces scripts/base_ad_ctr_estimation.py.
 
@@ -19,12 +23,34 @@ from pathlib import Path
 
 import joblib
 import pandas as pd
+from sklearn.base import clone
 
+from adsim.estimate import build_pair
+from adsim.hyperparams import ARM_RATIO_CAP
 from adsim.paths import DATA_DIR, RESULTS_DIR
-from adsim.simulation_steps import base_ad, define_xyt
+from adsim.simulation_steps import define_xyt, prepare_data
 
 
 log = logging.getLogger("adsim.simulate.base_ad_helpers")
+
+
+def fit_helpers(data: pd.DataFrame, cf_1) -> tuple[object, object]:
+    """Fit (m1, e1) on the rank-1 pair. `data` must have gone through
+    `prepare_data` (base ad coded 0)."""
+    plan = getattr(cf_1, "adsim_plan_", {})
+    pair = build_pair(
+        data, 1,
+        arm_ratio_cap=plan.get("arm_ratio_cap", ARM_RATIO_CAP),
+        random_state=plan.get("random_state", 42),
+    )
+    X, Y, T = define_xyt(pair)
+    T = (T != 0).astype(int)
+    if T.nunique() != 2:
+        raise ValueError(f"rank-1 pair has treatment values {sorted(T.unique())}; expected both 0 and 1")
+
+    m1 = clone(cf_1.model_y).fit(X, Y)
+    e1 = clone(cf_1.model_t).fit(X, T)
+    return m1, e1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,27 +74,12 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.perf_counter()
     log.info("loading data from %s", data_path)
     data = pd.read_stata(data_path)
+    prepare_data(data, base_ad=50, max_ad=100)
 
     log.info("loading rank-1 forest from %s", cf_1_path)
     cf_1 = joblib.load(cf_1_path)
 
-    # Restrict to base ad and rank-1 ad rows.
-    data = data[(data["advertiser_rank"] == base_ad) | (data["advertiser_rank"] == 1)]
-
-    X, Y, T = define_xyt(data)
-    T = T.apply(lambda x: 0 if x == 0 else 1)
-
-    t = time.perf_counter()
-    m1 = cf_1.model_y.fit(X, Y)
-    log.info("y model fitted in %.1fs", time.perf_counter() - t)
-
-    t = time.perf_counter()
-    e1 = cf_1.model_t.fit(X, T)
-    log.info("t model fitted in %.1fs", time.perf_counter() - t)
-
-    # Preserved from original behaviour: reassign e1 to the un-refitted
-    # cf_1.model_t. Looks like a bug, but matches what was previously saved.
-    e1 = cf_1.model_t
+    m1, e1 = fit_helpers(data, cf_1)
 
     out_dir = RESULTS_DIR / "Full Model"
     out_dir.mkdir(parents=True, exist_ok=True)

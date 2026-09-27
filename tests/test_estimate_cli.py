@@ -1,15 +1,16 @@
 """Tests for the adsim.estimate CLI logic.
 
-Targets the pure-function helpers (select_ranks, parse_args) and the
-scenario dispatch table. The actual fit_one_rank() call needs real data
-+ econml and isn't exercised here.
+Targets the pure-function helpers (select_ranks, parse_args, build_pair,
+plan_for_pair) and the scenario dispatch table. fit_one_rank() itself is
+exercised on synthetic data in test_estimate_fit.py.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from adsim.estimate import SCENARIOS, parse_args, select_ranks
+from adsim.estimate import SCENARIOS, build_pair, parse_args, plan_for_pair, select_ranks
+from adsim.hyperparams import ARM_RATIO_CAP, MAX_SAMPLES_CAP, MIN_CLICKS_PER_ARM
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +111,60 @@ def test_parse_args_force_and_dry_run():
 def test_parse_args_explicit_ranks():
     args = parse_args(["--scenario", "monopoly", "--ranks", "1,2,3"])
     assert args.ranks == "1,2,3"
+
+
+def test_parse_args_rule_defaults():
+    args = parse_args(["--scenario", "monopoly"])
+    assert args.arm_ratio_cap == ARM_RATIO_CAP
+    assert args.max_samples_cap == MAX_SAMPLES_CAP
+    assert args.min_clicks_per_arm == MIN_CLICKS_PER_ARM
+    assert args.group_col == "global_token_new"
+    assert args.cache_values is False
+
+
+def test_parse_args_rule_overrides():
+    args = parse_args(["--scenario", "monopoly", "--arm-ratio-cap", "5", "--max-samples-cap", "50000",
+                       "--min-clicks-per-arm", "10", "--group-col", "", "--cache-values"])
+    assert (args.arm_ratio_cap, args.max_samples_cap, args.min_clicks_per_arm) == (5.0, 50_000, 10.0)
+    assert args.group_col == ""
+    assert args.cache_values is True
+
+
+@pytest.mark.parametrize("argv", [
+    ["--n-estimators", "501"],      # not divisible by econml's BLB subforest size
+    ["--arm-ratio-cap", "0.5"],
+])
+def test_parse_args_rejects_invalid_rule_settings(argv):
+    with pytest.raises(SystemExit):
+        parse_args(["--scenario", "monopoly", *argv])
+
+
+# ---------------------------------------------------------------------------
+# build_pair / plan_for_pair
+# ---------------------------------------------------------------------------
+
+def test_build_pair_keeps_only_base_and_focal_and_balances_arms(make_pair):
+    data = make_pair(1_000, 10_000)
+    data.loc[:99, "advertiser_rank"] = 3   # rows of another rank must be dropped
+    pair = build_pair(data, 7, arm_ratio_cap=3.0, random_state=0)
+    counts = pair["advertiser_rank"].value_counts().to_dict()
+    assert counts == {0: 900, 7: 2_700}
+
+
+def test_build_pair_is_deterministic_given_the_seed(make_pair):
+    data = make_pair(1_000, 10_000)
+    a = build_pair(data, 7, random_state=1)
+    b = build_pair(data, 7, random_state=1)
+    assert a.equals(b)
+
+
+def test_plan_for_pair_uses_arm_click_rates(make_pair):
+    data = make_pair(2_000, 6_000, rate_base=0.02, rate_focal=0.04)
+    pair = build_pair(data, 7)
+    plan = plan_for_pair(pair, max_samples_cap=10_000, min_clicks_per_arm=5)
+    assert (plan.n_base, plan.n_focal) == (2_000, 6_000)
+    assert plan.expected_clicks_base == pair.loc[pair.advertiser_rank == 0, "is_clicked"].sum()
+    assert plan.max_samples == 4_000
 
 
 # ---------------------------------------------------------------------------
