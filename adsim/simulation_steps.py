@@ -62,16 +62,10 @@ param_grid = {
     'min_samples_split': [1000 , 2000, 5000]
 }
 
-# Causal forest tuning grid. Unlike param_grid above, min_samples_split here
-# is deliberately NOT cross-validated across a range -- it's set from the
-# click-rate constraint (avg click rate ~0.1%, so leaves need ~10-20K rows to
-# see a reliable handful of clicks) rather than discovered by comparing
-# candidates. See docs/hyperparameter_choices.txt for the full rationale.
-# n_estimators and max_depth are intentionally absent: leaving them out of
-# this dict means cf.tune() never touches them, so they stay fixed at
-# whatever fit_one_rank's CausalForestDML(...) constructor call sets,
-# instead of tune() silently overwriting them after the search (it was
-# previously doing exactly that with n_estimators=300 here).
+# Grids used only by adsim.estimate_joint; adsim.estimate derives its
+# settings from adsim.hyperparams instead. cf.tune() writes every key in
+# cf_param_grid back onto the estimator, so keep n_estimators / max_depth
+# out of it or they silently override the constructor.
 cf_param_grid = {
     'min_samples_split': [20000],
 }
@@ -119,15 +113,9 @@ def e_model_best_estimator(X, T, param_grid, n_jobs=n_jobs):
     start_time = time.perf_counter()
     e_model = PropensityModel(n_jobs=n_jobs)
 
-    # Define a custom scorer using log_loss
-    # log_loss_scorer = make_scorer(log_loss, greater_is_better=False, needs_proba=True)
-
-    # Define the scorer
-    f1_scorer = make_scorer(f1_score)
-
-    # Perform grid search cross-validation
-    # grid_search = GridSearchCV(estimator=e_model, param_grid=param_grid, cv=5, n_jobs=n_jobs, scoring=log_loss_scorer)
-    grid_search = GridSearchCV(estimator=e_model, param_grid=param_grid, scoring=f1_scorer, cv=5)
+    # Log-loss, not F1: DML needs calibrated probabilities, and F1 scores
+    # every candidate ~0 when the treated arm is rare.
+    grid_search = GridSearchCV(estimator=e_model, param_grid=param_grid, scoring="neg_log_loss", cv=5)
     grid_search.fit(X, T)
 
     best_params = grid_search.best_params_
