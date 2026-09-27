@@ -179,6 +179,19 @@ def calc_tes(data, user_visit_no, ranks_list):
     print(f"finished calculating te's for rank {rank} in {finish_time - start_time} seconds")
 
 
+def treated_probability(model, X):
+    """P(T=1 | X) from a binary propensity model, as an (n, 1) column."""
+    proba = np.asarray(model.predict_proba(X))
+    classes = list(getattr(model, "classes_", [0, 1]))
+    if proba.ndim != 2 or proba.shape[1] != 2 or 1 not in classes:
+        raise ValueError(
+            f"e1 must be a binary propensity model with classes [0, 1]; got classes {classes} "
+            f"and predict_proba shape {proba.shape}. Re-fit it with "
+            "`python -m adsim.simulate.base_ad_helpers`."
+        )
+    return proba[:, classes.index(1)].reshape(-1, 1)
+
+
 def calc_base_ad_ctr_vector(data, user_visit_no):
     start_time = time.perf_counter()
     # Use cf_1 (the rank-1 forest) to estimate y0.
@@ -187,7 +200,7 @@ def calc_base_ad_ctr_vector(data, user_visit_no):
     cf_1 = config.forests[1]
     tau_1 = cf_1.const_marginal_effect(X[mask]).reshape(-1, 1)
     m_1 = config.helpers["m1"].predict(X[mask]).reshape(-1, 1)
-    e_1 = config.helpers["e1"].predict_proba(X[mask]).reshape(-1, 1)
+    e_1 = treated_probability(config.helpers["e1"], X[mask])
     y_0 = m_1 - tau_1 * e_1
     finish_time = time.perf_counter()
     print(f"finished calculating base ad ctr in {finish_time - start_time} seconds")
@@ -588,7 +601,7 @@ def calc_base_ad_split_ctr(data, split_no, user_visit_no):
     X_filt = X[data['user_visit_no'] == user_visit_no]
     tau_1 = cf_1.const_marginal_effect(X_filt).reshape(-1, 1)
     m_1 = config.helpers["m1"].predict(X_filt).reshape(-1, 1)
-    e_1 = config.helpers["e1"].predict_proba(X_filt).reshape(-1, 1)
+    e_1 = treated_probability(config.helpers["e1"], X_filt)
     y_0 = m_1 - tau_1 * e_1
 
 
