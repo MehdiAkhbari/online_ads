@@ -53,8 +53,8 @@ def propensity_information(rd: RankData, *, n_strata: int = 20) -> dict[str, pd.
     """4.2.1: does user history help predict which ad is shown, beyond C?
 
     The same learner (the forest's propensity settings) is cross-fitted on
-    C alone and on C plus each history block; `delta_log_loss` is the
-    out-of-sample log-loss gain over e(C). Two forests on different feature
+    C alone and on C plus each history block; `gain` is the out-of-sample
+    log-loss improvement over e(C). Two forests on different feature
     sets overfit differently, so even an irrelevant block shifts the loss,
     and at N ~ 10^5 that shift looks significant. The test therefore
     compares the gain with `settings.n_permutations` refits in which the
