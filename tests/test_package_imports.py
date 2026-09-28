@@ -100,6 +100,8 @@ def test_paths_env_var_overrides(tmp_path: Path):
     "adsim.propensity_model",
     "adsim.simulation_steps",
     "adsim.estimate",
+    "adsim.diagnostics",
+    "adsim.diagnostics.cli",
     "adsim.simulate",
     "adsim.simulate.base_ad_helpers",
     "adsim.simulate.monopoly",
