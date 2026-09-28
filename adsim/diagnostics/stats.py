@@ -48,6 +48,22 @@ def z_test(estimate: float, se: float, *, one_sided: bool = False) -> tuple[floa
     return float(z), float(p)
 
 
+def null_draw_test(value: float, null) -> tuple[float, float]:
+    """Is `value` larger than a new draw from the distribution sampled by `null`?
+
+    Studentised with prediction-interval scaling, (value - mean) / (sd *
+    sqrt(1 + 1/B)), and a one-sided p-value from t with B - 1 df. Used when
+    `value` and each null draw carry the same model-fitting noise.
+    """
+    null = np.asarray(null, dtype=float)
+    b = len(null)
+    scale = null.std(ddof=1) * np.sqrt(1 + 1 / b) if b > 1 else float("nan")
+    if not np.isfinite(scale) or scale <= 0:
+        return float("nan"), float("nan")
+    z = (value - null.mean()) / scale
+    return float(z), float(sps.t.sf(z, df=b - 1))
+
+
 # ----------------------------------------------------------------------
 # Balance
 # ----------------------------------------------------------------------

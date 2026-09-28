@@ -11,6 +11,7 @@ from adsim.diagnostics.stats import (
     crump_alpha,
     expected_calibration_error,
     mixed_cell_share,
+    null_draw_test,
     ovb_bounds,
     ovb_params,
     partialling_out_ate,
@@ -19,6 +20,14 @@ from adsim.diagnostics.stats import (
     standardized_mean_difference,
     within_cell_smd,
 )
+
+
+def test_null_draw_test_uses_prediction_interval_scaling():
+    null = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    z, p = null_draw_test(2.0 + 2 * null.std(ddof=1) * np.sqrt(1.2), null)
+    assert z == pytest.approx(2.0)
+    assert p == pytest.approx(0.0581, abs=1e-3)   # t with 4 df
+    assert np.isnan(null_draw_test(1.0, [0.5])[0])
 
 
 def test_smd_matches_the_textbook_formula():

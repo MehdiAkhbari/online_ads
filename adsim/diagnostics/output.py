@@ -69,7 +69,8 @@ def _grid(n: int, width: float = 3.2, height: float = 2.4, **kw):
 # ----------------------------------------------------------------------
 
 def plot_propensity_info(df: pd.DataFrame):
-    """Out-of-sample log-loss gain from adding user history to e(C), by rank."""
+    """Log-loss gain from adding user history to e(C) (bars), against the
+    gain from the same block permuted (black: null mean +/- 1.96 SD), by rank."""
     df = df[df["feature_set"] != "context"]
     sets = list(dict.fromkeys(df["feature_set"]))
     ranks = list(dict.fromkeys(df["rank"]))
@@ -78,7 +79,10 @@ def plot_propensity_info(df: pd.DataFrame):
     fig, ax = plt.subplots(figsize=(max(5, 0.6 * len(ranks) + 2), 3.2))
     for i, fs in enumerate(sets):
         sub = df[df["feature_set"] == fs].set_index("rank").reindex(ranks)
-        ax.bar(x + i * width, sub["delta_log_loss"], width, yerr=1.96 * sub["delta_se"], label=fs, capsize=2)
+        ax.bar(x + i * width, sub["gain"], width, label=fs)
+        if "null_gain_mean" in sub:
+            ax.errorbar(x + i * width, sub["null_gain_mean"], yerr=1.96 * sub["null_gain_sd"],
+                        fmt="_", color="black", capsize=3)
     ax.axhline(0, color="black", lw=0.8)
     ax.set_xticks(x + width * (len(sets) - 1) / 2, [str(r) for r in ranks])
     ax.set_xlabel("advertiser rank")

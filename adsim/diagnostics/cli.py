@@ -264,6 +264,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
     p.add_argument("--split", type=int, default=None)
     p.add_argument("--subsample-ratio", type=float, default=0.8, help="Only used for --scenario root-n.")
+    p.add_argument("--subsample-seed", type=int, default=42,
+                   help="Seed of the root-n subsample; must match the one used by adsim.estimate.")
     p.add_argument("--checks", default="all", help="Comma-separated checks or groups (default: all).")
     p.add_argument("--ranks", default=None, help="Comma-separated ranks (default: the --top-k most shown).")
     p.add_argument("--top-k", type=int, default=10, help="Diagnose the K most-shown ads (default 10).")
@@ -290,6 +292,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--n-folds", type=int, default=3)
     p.add_argument("--holdout-frac", type=float, default=0.3, help="Held-out user share for validation.")
     p.add_argument("--refit-trees", type=int, default=100, help="Trees per refit forest (divisible by 4).")
+    p.add_argument("--n-permutations", type=int, default=10,
+                   help="Permutation refits per history block in propensity-info (0 skips the test).")
     p.add_argument("--max-eval-rows", type=int, default=100_000,
                    help="Impressions sampled (by user) for the pipeline checks.")
     p.add_argument("--n-bins", type=int, default=10, help="Quantile bins for calibration.")
@@ -327,13 +331,13 @@ def main(argv: list[str] | None = None) -> int:
         group_col=args.group_col or None,
         cell_cols=tuple(c.strip() for c in args.cell_cols.split(",") if c.strip()),
         n_folds=args.n_folds, n_jobs=args.n_jobs, random_state=args.random_state,
-        refit_trees=args.refit_trees, holdout_frac=args.holdout_frac,
+        refit_trees=args.refit_trees, holdout_frac=args.holdout_frac, n_permutations=args.n_permutations,
     )
 
     t0 = time.perf_counter()
     data = load_estimation_data(args.data or scenario.data_path(args.split),
                                 group_col=settings.group_col, visit_col=args.visit_col or None)
-    data = maybe_subsample(data, scenario, args.subsample_ratio, args.random_state)
+    data = maybe_subsample(data, scenario, args.subsample_ratio, args.subsample_seed)
     ranks = [int(r) for r in args.ranks.split(",")] if args.ranks else top_ranks(data, args.top_k)
     log.info("scenario=%s forests=%s out=%s ranks=%s checks=%s",
              scenario.name, forest_dir, out_dir, ranks, args.check_names)

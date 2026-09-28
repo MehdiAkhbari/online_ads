@@ -68,6 +68,7 @@ class Settings:
     random_state: int = 42
     refit_trees: int = 100
     holdout_frac: float = 0.3
+    n_permutations: int = 10
 
 
 # ----------------------------------------------------------------------
@@ -112,8 +113,9 @@ def diagnosable_ranks(data: pd.DataFrame) -> list[int]:
 
 
 def top_ranks(data: pd.DataFrame, k: int) -> list[int]:
+    fitted = set(diagnosable_ranks(data))
     counts = data["advertiser_rank"].value_counts()
-    return [r for r in counts.index if r in set(diagnosable_ranks(data))][:k]
+    return [int(r) for r in counts.index if r in fitted][:k]
 
 
 def load_rank_forest(forest_dir: Path, rank: int):

@@ -30,6 +30,7 @@ from adsim.diagnostics.stats import (
     crump_alpha,
     demean_within,
     mixed_cell_share,
+    null_draw_test,
     ovb_bounds,
     ovb_params,
     partial_r2,
@@ -38,7 +39,6 @@ from adsim.diagnostics.stats import (
     robustness_value,
     standardized_mean_difference,
     within_cell_smd,
-    z_test,
 )
 
 HISTORY_BLOCKS = {"browsing": BROWSING_COLS, "ad_history": AD_HISTORY_COLS}
@@ -49,38 +49,59 @@ def _log_loss_rows(t: np.ndarray, e: np.ndarray) -> np.ndarray:
     return -(t * np.log(e) + (1 - t) * np.log(1 - e))
 
 
-def propensity_information(rd: RankData) -> dict[str, pd.DataFrame]:
+def propensity_information(rd: RankData, *, n_strata: int = 20) -> dict[str, pd.DataFrame]:
     """4.2.1: does user history help predict which ad is shown, beyond C?
 
     The same learner (the forest's propensity settings) is cross-fitted on
-    C alone and on C plus each history block. `delta_log_loss` > 0 means the
-    history block improves out-of-sample prediction of the ad shown; its
-    user-clustered z-test is one-sided. Caveat: if `impression_repeat` /
-    `previous_clicks` count the ad actually shown rather than rank r, the
-    ad-history block predicts T mechanically.
+    C alone and on C plus each history block; `delta_log_loss` is the
+    out-of-sample log-loss gain over e(C). Two forests on different feature
+    sets overfit differently, so even an irrelevant block shifts the loss,
+    and at N ~ 10^5 that shift looks significant. The test therefore
+    compares the gain with `settings.n_permutations` refits in which the
+    added block is shuffled within `n_strata` quantile strata of e(C)
+    (under Assumption 1, T is independent of history given e(C), so this is
+    the null). `excess_gain` = gain minus the null mean; `z_perm` and
+    `p_perm` test it against the null draws (`stats.null_draw_test`);
+    `p_perm_empirical` is the rank-based permutation p-value.
+
+    Caveat: if `impression_repeat` / `previous_clicks` count the ad actually
+    shown rather than rank r, the ad-history block predicts T mechanically.
     """
     t, groups = rd.T, rd.groups
-    base_ll = _log_loss_rows(t, rd.propensity("context"))
-    base_brier = np.mean((t - rd.propensity("context")) ** 2)
+    e_context = rd.propensity("context")
+    base_ll = _log_loss_rows(t, e_context)
+    base_brier = np.mean((t - e_context) ** 2)
+    strata = pd.qcut(e_context, n_strata, labels=False, duplicates="drop")
+    rng = np.random.default_rng(rd.settings.random_state)
+
     rows = []
-    for name in FEATURE_SETS:
+    for name, cols in FEATURE_SETS.items():
         e = rd.propensity(name)
         ll = _log_loss_rows(t, e)
-        delta, se = clustered_mean(base_ll - ll, groups)
-        z, p = z_test(delta, se, one_sided=True)
-        rows.append({
-            "feature_set": name,
-            "n": len(t),
-            "log_loss": ll.mean(),
-            "auc": roc_auc_score(t, e),
-            "brier": np.mean((t - e) ** 2),
-            "delta_log_loss": delta,
-            "delta_se": se,
-            "z": z,
-            "p_value": p,
-            "partial_r2_T": 1 - np.mean((t - e) ** 2) / base_brier,
-        })
+        gain, se = clustered_mean(base_ll - ll, groups)
+        row = {"feature_set": name, "n": len(t), "log_loss": ll.mean(), "auc": roc_auc_score(t, e),
+               "brier": np.mean((t - e) ** 2), "partial_r2_T": 1 - np.mean((t - e) ** 2) / base_brier,
+               "gain": gain, "gain_se": se}
+        if name != "context" and rd.settings.n_permutations > 0:
+            added = [c for c in cols if c not in CONTEXT_COLS]
+            null = np.array([
+                np.mean(base_ll - _log_loss_rows(t, _permuted_block_propensity(rd, cols, added, strata, rng)))
+                for _ in range(rd.settings.n_permutations)
+            ])
+            z, p = null_draw_test(gain, null)
+            row.update({"null_gain_mean": null.mean(), "null_gain_sd": null.std(ddof=1),
+                        "excess_gain": gain - null.mean(), "z_perm": z, "p_perm": p,
+                        "p_perm_empirical": (1 + np.sum(null >= gain)) / (1 + len(null))})
+        rows.append(row)
     return {"propensity_info": pd.DataFrame(rows)}
+
+
+def _permuted_block_propensity(rd: RankData, cols: list[str], block: list[str], strata, rng) -> np.ndarray:
+    """Cross-fitted P(T = 1 | cols) with the `block` columns shuffled within strata."""
+    X = rd.pair[cols].copy()
+    X[block] = X[block].to_numpy()[permute_within(np.arange(len(X)), strata, rng)]
+    return cross_fit(rd.propensity_learner(), X, rd.T, rd.groups,
+                     n_folds=rd.settings.n_folds, random_state=rd.settings.random_state, proba=True)
 
 
 def covariate_balance(rd: RankData) -> dict[str, pd.DataFrame]:

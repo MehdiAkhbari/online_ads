@@ -27,7 +27,7 @@ from adsim.diagnostics.data import (
 )
 from adsim.simulation_steps import define_xyt, prepare_data
 
-SETTINGS = Settings(n_jobs=2, refit_trees=8)
+SETTINGS = Settings(n_jobs=2, refit_trees=8, n_permutations=9)
 
 
 def _prepared(raw: pd.DataFrame) -> pd.DataFrame:
@@ -88,9 +88,22 @@ def test_propensity_information_flags_selection_on_browsing_history(clean, confo
     ok = identification.propensity_information(clean)["propensity_info"]
     bad = identification.propensity_information(confounded)["propensity_info"]
     assert list(ok["feature_set"]) == ["context", "context+browsing", "context+ad_history", "all"]
-    assert _row(ok, "feature_set", "context+browsing")["z"] < 2
-    assert _row(bad, "feature_set", "context+browsing")["z"] > 5
+    assert _row(ok, "feature_set", "context+browsing")["p_perm"] > 0.01
+    assert _row(bad, "feature_set", "context+browsing")["z_perm"] > 5
+    assert _row(bad, "feature_set", "context+browsing")["p_perm"] < 1e-3
+    assert _row(bad, "feature_set", "context+browsing")["p_perm_empirical"] == pytest.approx(0.1)
     assert _row(bad, "feature_set", "context+browsing")["auc"] > _row(bad, "feature_set", "context")["auc"]
+
+
+def test_permutation_null_absorbs_the_gain_from_an_irrelevant_block(make_estimation_data):
+    # Without selection the raw gain is non-zero from overfitting alone; the
+    # permuted refits reproduce it, so no history block is flagged.
+    rd = RankData.build(_prepared(make_estimation_data(seed=3)), 1, None, SETTINGS)
+    table = identification.propensity_information(rd)["propensity_info"].set_index("feature_set")
+    assert table.loc["context", "gain"] == 0
+    for name in ("context+browsing", "context+ad_history", "all"):
+        assert table.loc[name, "null_gain_sd"] > 0
+        assert table.loc[name, "p_perm"] > 0.01
 
 
 def test_balance_flags_the_selected_covariate(clean, confounded):
