@@ -15,7 +15,7 @@ in a set of Jupyter notebooks.
 - ✅ Importing `adsim.config` does no I/O — forests load on demand
 - ✅ One CLI per pipeline stage (`python -m adsim.<thing>`)
 - ✅ HPC-friendly estimation (auto-resume, per-rank logs, fault-isolated)
-- ✅ Test suite: 115 tests passing
+- ✅ Test suite: 155 tests passing
 - ⚠️  Input `.dta` files are not in git — must be supplied locally
 - ⚠️  Old `CF - Rank *.pkl` artifacts (sklearn 1.2 / econml 0.14) likely
   won't load in this env — re-fit with `python -m adsim.estimate`, or
@@ -103,12 +103,13 @@ notebooks/sample_size/sample_size_analysis.ipynb
 | `adsim/estimate.py` | `python -m adsim.estimate` — fit per-rank causal forests, one CLI for all four scenarios. |
 | `adsim/simulate/` | `python -m adsim.simulate.{base_ad_helpers,monopoly,duopoly,duopoly_root_n}` — forward-simulation entry points. |
 | `adsim/simulate/legacy/` | `python -m adsim.simulate.legacy.{simulation,simulation_parallel}` — older "Last 2 Days" simulations, kept for reference. |
+| `adsim/diagnostics/` | `python -m adsim.diagnostics` — referee diagnostics (identification tests, model checks) on the saved forests. See [`docs/diagnostics.md`](docs/diagnostics.md). |
 | `scripts/check_old_pickles.py` | Standalone tool: verifies whether old `CF - Rank *.pkl` artifacts still load in this env. |
 | `scripts/ranks_list.pickle` | Canonical input artifact (96 advertiser ranks; checked into git). |
 | `notebooks/analysis/` | Paper-ready analysis notebooks (`results_analysis`, `advertiser_welfare_analysis`, `ctr_vs_repeat`, `subject_correlation_matrix`, `merge_simulation_results`). |
 | `notebooks/sample_size/` | Sample-size sensitivity aggregation (`sample_size_analysis.ipynb`). |
 | `notebooks/exploration/` | Pairwise-estimation studies (`pairwise_estimation_ad_1_vs_2`, `pairwise_estimation_ad_1_vs_3_full_week`). See [`notebooks/README.md`](notebooks/README.md) for details. |
-| `tests/` | Pytest suite (115 tests). |
+| `tests/` | Pytest suite (155 tests). |
 | `data/`, `results/` | **Not in git.** Populate locally before running anything. |
 
 ---
@@ -133,7 +134,7 @@ Each new shell needs `source .venv/bin/activate`.
 
 ```bash
 python -c "from econml.dml import CausalForestDML; import adsim; print(adsim.__version__)"
-python -m pytest tests/                # 115 passing
+python -m pytest tests/                # 155 passing
 python -m adsim.estimate --help        # CLI sanity
 ```
 
@@ -290,6 +291,22 @@ Open notebooks under `notebooks/analysis/` (with `jupyter lab`):
 See [`notebooks/README.md`](notebooks/README.md) for what each one does
 and which inputs it needs.
 
+### 5. Diagnostics (referee checks)
+
+After step 1 (and step 2 for the calibration checks), run the revision
+plan's identification tests and model diagnostics on the saved forests:
+
+```bash
+python -m adsim.diagnostics --scenario monopoly                   # all checks, 10 most-shown ads
+python -m adsim.diagnostics --scenario monopoly --checks identification --ranks 1,2,3
+python -m adsim.diagnostics --scenario split --split 7 --checks model
+```
+
+Tables (CSV + LaTeX), figures and a `manifest.json` land under
+`results/Full Model/Diagnostics/<scenario dir>/<check>/`. The checks, how
+to read them and what is not covered are in
+[`docs/diagnostics.md`](docs/diagnostics.md).
+
 ---
 
 ## Working with the package programmatically
@@ -319,7 +336,7 @@ This is the contract every simulation script relies on.
 ## Tests
 
 ```bash
-python -m pytest tests/                 # 115 passing
+python -m pytest tests/                 # 155 passing
 python -m pytest tests/ -v              # verbose
 python -m pytest tests/test_estimate_cli.py    # one file
 ```
@@ -342,6 +359,11 @@ Coverage:
   submodule imports cleanly).
 - `tests/test_cli_smoke.py` — every `python -m adsim.X --help` exits 0,
   and `--scenario unknown` fails cleanly with exit code 2.
+- `tests/test_diagnostics_stats.py`, `test_diagnostics_checks.py`,
+  `test_diagnostics_cli.py` — the diagnostics' statistics helpers, each
+  check on synthetic data with and without planted selection on user
+  history, and `python -m adsim.diagnostics` end to end on a synthetic
+  data / results tree.
 
 What the tests **don't** cover (out of scope without real data + fitted
 forests): the actual per-step simulation primitives (`calc_tes`,
@@ -434,7 +456,7 @@ intentional.
   reports OK / DEGRADED / INCOMPATIBLE for any pre-existing
   `CF - Rank *.pkl` so you don't have to guess whether a pickle from
   sklearn 1.2 / econml 0.14 will work here.
-- **Tests pass.** `python -m pytest tests/` → 115 passing tests covering
+- **Tests pass.** `python -m pytest tests/` → 155 passing tests covering
   pure-function helpers, CLI argument parsing, package import
   invariants, and CLI smoke tests.
 
