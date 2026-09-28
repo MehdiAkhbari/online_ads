@@ -16,6 +16,7 @@ import pytest
 
 ENTRY_POINTS = [
     "adsim.estimate",
+    "adsim.diagnostics",
     "adsim.simulate.base_ad_helpers",
     "adsim.simulate.monopoly",
     "adsim.simulate.duopoly",

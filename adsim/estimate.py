@@ -187,6 +187,38 @@ def plan_for_pair(
     )
 
 
+def pair_groups(pair: pd.DataFrame, T: pd.Series, group_col: str | None) -> np.ndarray | None:
+    """User ids for grouped cross-fitting, or None when `group_col` is absent
+    or an arm has fewer than MIN_USERS_PER_ARM_FOR_GROUPS users."""
+    if not group_col or group_col not in pair.columns:
+        return None
+    users_per_arm = pair.groupby(T)[group_col].nunique()
+    if len(users_per_arm) == 2 and users_per_arm.min() >= MIN_USERS_PER_ARM_FOR_GROUPS:
+        return pair[group_col].to_numpy()
+    return None
+
+
+def build_forest(plan: CFPlan, model_y, model_t, *, n_jobs: int, random_state: int) -> CausalForestDML:
+    """An unfitted CausalForestDML with `plan`'s settings (the only place the
+    estimator is configured, so diagnostics refit exactly what is saved)."""
+    return CausalForestDML(
+        model_y=model_y,
+        model_t=model_t,
+        discrete_treatment=True,
+        criterion="het",
+        honest=True,
+        n_estimators=plan.n_estimators,
+        max_samples=plan.max_samples,
+        min_samples_leaf=plan.min_samples_leaf,
+        min_samples_split=plan.min_samples_split,
+        min_var_fraction_leaf=plan.min_var_fraction_leaf,
+        max_depth=None,
+        n_jobs=n_jobs,
+        random_state=random_state,
+        verbose=0,
+    )
+
+
 def fit_one_rank(
     *,
     rank: int,
@@ -226,14 +258,10 @@ def fit_one_rank(
 
     X, Y, T = define_xyt(pair)
     T = (T != 0).astype(int)
-    groups = None
-    if group_col and group_col in pair.columns:
-        users_per_arm = pair.groupby(T)[group_col].nunique()
-        if len(users_per_arm) == 2 and users_per_arm.min() >= MIN_USERS_PER_ARM_FOR_GROUPS:
-            groups = pair[group_col].to_numpy()
-        else:
-            log.warning("rank=%d: an arm has fewer than %d users; cross-fitting by row",
-                        rank, MIN_USERS_PER_ARM_FOR_GROUPS)
+    groups = pair_groups(pair, T, group_col)
+    if groups is None and group_col and group_col in pair.columns:
+        log.warning("rank=%d: an arm has fewer than %d users; cross-fitting by row",
+                    rank, MIN_USERS_PER_ARM_FOR_GROUPS)
 
     rare_arm_rate = min(plan.n_base, plan.n_focal) / plan.n_total
     t0 = time.perf_counter()
@@ -248,22 +276,7 @@ def fit_one_rank(
     log.info("rank=%d nuisance grid search done in %.1fs (e=%s, m=%s)",
              rank, time.perf_counter() - t0, best_params_e, best_params_m)
 
-    cf = CausalForestDML(
-        model_y=model_y,
-        model_t=model_t,
-        discrete_treatment=True,
-        criterion="het",
-        honest=True,
-        n_estimators=plan.n_estimators,
-        max_samples=plan.max_samples,
-        min_samples_leaf=plan.min_samples_leaf,
-        min_samples_split=plan.min_samples_split,
-        min_var_fraction_leaf=plan.min_var_fraction_leaf,
-        max_depth=None,
-        n_jobs=n_jobs,
-        random_state=random_state,
-        verbose=0,
-    )
+    cf = build_forest(plan, model_y, model_t, n_jobs=n_jobs, random_state=random_state)
 
     t0 = time.perf_counter()
     cf.fit(Y=Y, T=T, X=X, groups=groups, inference="blb", cache_values=cache_values)
